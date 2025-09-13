@@ -1,0 +1,194 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Updated color palette for Glonix Electronics - professional tech-focused design */
+  --background: oklch(1 0 0); /* Pure white */
+  --foreground: oklch(0.35 0.02 258); /* Dark gray #475569 */
+  --card: oklch(0.98 0.02 195); /* Light cyan #ecfeff */
+  --card-foreground: oklch(0.25 0.08 195); /* Cyan-800 #164e63 */
+  --popover: oklch(1 0 0); /* White */
+  --popover-foreground: oklch(0.35 0.02 258); /* Dark gray */
+  --primary: oklch(0.25 0.08 195); /* Cyan-800 #164e63 - trust and professionalism */
+  --primary-foreground: oklch(1 0 0); /* White */
+  --secondary: oklch(0.75 0.15 120); /* Lime green #84cc16 - accent color */
+  --secondary-foreground: oklch(1 0 0); /* White */
+  --muted: oklch(0.98 0.005 258); /* Very light gray #f9fafb */
+  --muted-foreground: oklch(0.45 0.02 258); /* Medium gray #4b5563 */
+  --accent: oklch(0.75 0.15 120); /* Lime green accent */
+  --accent-foreground: oklch(0.25 0.08 195); /* Cyan-800 */
+  --destructive: oklch(0.65 0.15 25); /* Red for errors */
+  --destructive-foreground: oklch(1 0 0); /* White */
+  --border: oklch(0.9 0.005 258); /* Light border #e5e7eb */
+  --input: oklch(0.98 0.005 258); /* Light input background */
+  --ring: oklch(0.25 0.08 195 / 0.3); /* Primary with opacity */
+  --chart-1: oklch(0.55 0.15 195); /* Cyan variants for charts */
+  --chart-2: oklch(0.45 0.12 150);
+  --chart-3: oklch(0.7 0.15 85);
+  --chart-4: oklch(0.6 0.18 25);
+  --chart-5: oklch(0.5 0.2 280);
+  --radius: 0.5rem; /* Modern rounded corners */
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.35 0.02 258);
+  --sidebar-primary: oklch(0.98 0.005 258);
+  --sidebar-primary-foreground: oklch(0.25 0.08 195);
+  --sidebar-accent: oklch(0.75 0.15 120);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(0.9 0.005 258);
+  --sidebar-ring: oklch(0.25 0.08 195 / 0.3);
+}
+
+.dark {
+  /* Dark mode variants maintaining the professional tech aesthetic */
+  --background: oklch(0.08 0.005 258); /* Very dark background */
+  --foreground: oklch(0.95 0.005 258); /* Light text */
+  --card: oklch(0.12 0.02 195); /* Dark card with cyan tint */
+  --card-foreground: oklch(0.9 0.02 195); /* Light cyan text */
+  --popover: oklch(0.08 0.005 258);
+  --popover-foreground: oklch(0.95 0.005 258);
+  --primary: oklch(0.6 0.12 195); /* Lighter cyan for dark mode */
+  --primary-foreground: oklch(0.08 0.005 258);
+  --secondary: oklch(0.7 0.15 120); /* Lime green accent */
+  --secondary-foreground: oklch(0.08 0.005 258);
+  --muted: oklch(0.15 0.005 258);
+  --muted-foreground: oklch(0.65 0.02 258);
+  --accent: oklch(0.7 0.15 120);
+  --accent-foreground: oklch(0.08 0.005 258);
+  --destructive: oklch(0.6 0.15 25);
+  --destructive-foreground: oklch(0.95 0.005 258);
+  --border: oklch(0.2 0.005 258);
+  --input: oklch(0.15 0.005 258);
+  --ring: oklch(0.6 0.12 195 / 0.3);
+  --chart-1: oklch(0.6 0.15 195);
+  --chart-2: oklch(0.55 0.12 150);
+  --chart-3: oklch(0.75 0.15 85);
+  --chart-4: oklch(0.65 0.18 25);
+  --chart-5: oklch(0.6 0.2 280);
+  --sidebar: oklch(0.08 0.005 258);
+  --sidebar-foreground: oklch(0.95 0.005 258);
+  --sidebar-primary: oklch(0.6 0.12 195);
+  --sidebar-primary-foreground: oklch(0.08 0.005 258);
+  --sidebar-accent: oklch(0.15 0.005 258);
+  --sidebar-accent-foreground: oklch(0.95 0.005 258);
+  --sidebar-border: oklch(0.2 0.005 258);
+  --sidebar-ring: oklch(0.6 0.12 195 / 0.3);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /* Added custom animations for 3D effects and modern interactions */
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0px);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  @keyframes pulse-glow {
+    0%,
+    100% {
+      box-shadow: 0 0 20px rgba(132, 204, 22, 0.3);
+    }
+    50% {
+      box-shadow: 0 0 30px rgba(132, 204, 22, 0.6);
+    }
+  }
+
+  @keyframes slide-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  .animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  .animate-slide-in-up {
+    animation: slide-in-up 0.6s ease-out;
+  }
+
+  /* Modern gradient backgrounds for tech aesthetic */
+  .gradient-tech {
+    background: linear-gradient(135deg, oklch(0.98 0.02 195) 0%, oklch(1 0 0) 50%, oklch(0.95 0.01 120) 100%);
+  }
+
+  .gradient-primary {
+    background: linear-gradient(135deg, oklch(0.25 0.08 195) 0%, oklch(0.35 0.1 200) 100%);
+  }
+}
+
+@keyframes pulse-once {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-pulse-once {
+  animation: pulse-once 2s ease-in-out;
+}
