@@ -5,13 +5,14 @@ import { EnquiryCreate, EnquiryReply, Enquiry, ApiResponse, PaginatedResponse } 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 class ApiClient {
-  private getAuthHeaders() {
-    const token = localStorage.getItem('token')
-    return {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` })
-    }
+// In lib/api.ts
+private getAuthHeaders() {
+  const token = localStorage.getItem('access_token') // Changed from 'token'
+  return {
+    'Content-Type': 'application/json',
+    ...(token && { Authorization: `Bearer ${token}` })
   }
+}
 
   private async handleResponse<T>(response: Response): Promise<T> {
     if (!response.ok) {

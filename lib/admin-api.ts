@@ -4,41 +4,76 @@ import type { User, Product, Order, ContactMessage, ProductFormData, UserFormDat
 export class AdminApiService {
   private static readonly API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
-  private static async apiRequest(endpoint: string, options: RequestInit = {}): Promise<any> {
-    const token = localStorage.getItem("access_token")
-    if (!token) {
-      throw new Error("No authentication token found")
-    }
-
-    const url = `${this.API_BASE_URL}${endpoint}`
-    
-    const defaultHeaders = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-    }
-
-    const config = {
-      ...options,
-      headers: {
-        ...defaultHeaders,
-        ...options.headers,
-      },
-    }
-
-    try {
-      const response = await fetch(url, config)
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Network error' }))
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`)
-      }
-
-      return await response.json()
-    } catch (error) {
-      console.error(`API request failed for ${endpoint}:`, error)
-      throw error
-    }
+private static async apiRequest(endpoint: string, options: RequestInit = {}): Promise<any> {
+  const token = localStorage.getItem("access_token")
+  if (!token) {
+    console.error("No authentication token found")
+    throw new Error("No authentication token found. Please log in.")
   }
+
+  const url = `${this.API_BASE_URL}${endpoint}`
+  
+  console.log('API Request Details:', {
+    url,
+    method: options.method || 'GET',
+    hasToken: !!token,
+    tokenPreview: token ? `${token.substring(0, 20)}...` : 'none'
+  })
+
+  const defaultHeaders = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`,
+  }
+
+  const config = {
+    ...options,
+    headers: {
+      ...defaultHeaders,
+      ...options.headers,
+    },
+  }
+
+  try {
+    const response = await fetch(url, config)
+    
+    console.log('Response Status:', response.status, response.statusText)
+    
+    if (response.status === 401) {
+      console.error("Authentication failed - token may be expired")
+      // Clear invalid token
+      localStorage.removeItem("access_token")
+      localStorage.removeItem("current_user")
+      throw new Error("Authentication expired. Please log in again.")
+    }
+    
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error(`API Error ${response.status}:`, errorText)
+      
+      let errorData
+      try {
+        errorData = JSON.parse(errorText)
+      } catch {
+        errorData = { detail: errorText || 'Network error' }
+      }
+      
+      throw new Error(errorData.detail || `HTTP error! status: ${response.status}`)
+    }
+
+    const data = await response.json()
+    console.log('API Response:', data)
+    return data
+    
+  } catch (error) {
+    console.error(`API request failed for ${endpoint}:`, error)
+    
+    if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+      throw new Error("Cannot connect to server. Please check if the backend is running on http://localhost:8000")
+    }
+    
+    throw error
+  }
+}
 
   // ANALYTICS
   static async getAdminStats(): Promise<AdminStats> {

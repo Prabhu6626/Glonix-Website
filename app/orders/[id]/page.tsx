@@ -167,10 +167,7 @@ function OrderDetailContent() {
           </div>
 
           <div className="flex gap-2">
-            <Button variant="outline">
-              <Download className="h-4 w-4 mr-2" />
-              Download Invoice
-            </Button>
+            
             {order.status === "shipped" && (
               <Button>
                 <Truck className="h-4 w-4 mr-2" />

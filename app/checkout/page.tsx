@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
+import Script from "next/script"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -13,6 +14,13 @@ import { ProtectedRoute } from "@/components/auth/protected-route"
 import { useAuth } from "@/hooks/use-auth"
 import { AuthService } from "@/lib/auth"
 import { CreditCard, Truck, Shield, ArrowLeft, Package, MapPin } from "lucide-react"
+
+// Extend Window interface for Razorpay
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
 
 interface CartItem {
   id: string
@@ -44,6 +52,7 @@ function CheckoutContent() {
   const [cartItems, setCartItems] = useState<CartItem[]>([])
   const [loading, setLoading] = useState(true)
   const [processing, setProcessing] = useState(false)
+  const [razorpayLoaded, setRazorpayLoaded] = useState(false)
 
   // Form states
   const [shippingAddress, setShippingAddress] = useState<ShippingAddress>({
@@ -170,109 +179,145 @@ function CheckoutContent() {
     setProcessing(true)
 
     try {
-      // Simulate order processing
-      await new Promise((resolve) => setTimeout(resolve, 2000))
-
-      // Create order object with proper structure matching Order interface
-      const order = {
-        id: `order-${Date.now()}`,
-        order_number: `ORD-${new Date().getFullYear()}-${String(Date.now()).slice(-3)}`,
-        user_id: user?.id || "",
-        user_name: user?.full_name || "",
-        user_email: user?.email || "",
-        items: cartItems.map(item => ({
-          product_id: item.id,
-          product_name: item.name,
-          product_sku: item.sku,
-          price: item.price,
-          quantity: item.quantity,
-          total: item.price * item.quantity
-        })),
-        shipping_address: {
-          first_name: shippingAddress.firstName,
-          last_name: shippingAddress.lastName,
-          company: shippingAddress.company || "",
-          address1: shippingAddress.address1,
-          address2: shippingAddress.address2 || "",
-          city: shippingAddress.city,
-          state: shippingAddress.state,
-          zip_code: shippingAddress.zipCode,
-          country: shippingAddress.country,
-          phone: shippingAddress.phone || ""
-        },
-        billing_address: sameAsShipping ? {
-          first_name: shippingAddress.firstName,
-          last_name: shippingAddress.lastName,
-          company: shippingAddress.company || "",
-          address1: shippingAddress.address1,
-          address2: shippingAddress.address2 || "",
-          city: shippingAddress.city,
-          state: shippingAddress.state,
-          zip_code: shippingAddress.zipCode,
-          country: shippingAddress.country,
-          phone: shippingAddress.phone || ""
-        } : {
-          first_name: billingAddress.firstName,
-          last_name: billingAddress.lastName,
-          company: billingAddress.company || "",
-          address1: billingAddress.address1,
-          address2: billingAddress.address2 || "",
-          city: billingAddress.city,
-          state: billingAddress.state,
-          zip_code: billingAddress.zipCode,
-          country: billingAddress.country,
-          phone: billingAddress.phone || ""
-        },
-        shipping_method: shippingMethod,
-        payment_method: paymentMethod,
-        subtotal,
-        shipping_cost: shippingCost,
-        tax,
-        total,
-        status: "confirmed" as const,
-        payment_status: "completed" as const,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        estimated_delivery: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      console.log('=== CHECKOUT DEBUG START ===')
+      console.log('Creating order with total:', total)
+      console.log('User:', user)
+      console.log('Razorpay loaded:', razorpayLoaded)
+      console.log('Window.Razorpay exists:', !!window.Razorpay)
+      
+      // Check if user is authenticated
+      const token = localStorage.getItem('access_token')
+      console.log('Auth token exists:', !!token)
+      
+      if (!token) {
+        throw new Error('No authentication token found. Please log in again.')
       }
 
-      // Save order to user-specific localStorage and clear cart
-      const userData = localStorage.getItem("current_user")
-      if (userData) {
-        try {
-          const user = JSON.parse(userData)
-          const userId = user.id
-          const ordersKey = `orders_${userId}`
-          const cartKey = `cart_${userId}`
+      // Check if Razorpay is loaded
+      if (!razorpayLoaded || !window.Razorpay) {
+        throw new Error("Payment system not loaded. Please refresh the page and try again.")
+      }
+
+      // Validate required fields
+      if (!shippingAddress.firstName || !shippingAddress.lastName || !shippingAddress.address1 || 
+          !shippingAddress.city || !shippingAddress.state || !shippingAddress.zipCode || !shippingAddress.phone) {
+        throw new Error("Please fill in all required shipping address fields.")
+      }
+      
+      // 1. Create Razorpay order via backend
+      console.log('Creating Razorpay order...')
+      const res = await fetch("http://localhost:8000/create-order", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          amount: total,
+          currency: "INR",
+          receipt: `rcpt_${Date.now()}`
+        })
+      })
+
+      console.log('Response status:', res.status)
+      console.log('Response ok:', res.ok)
+
+      // Log response text first to see raw response
+      const responseText = await res.text()
+      console.log('Raw response text:', responseText)
+
+      let data
+      try {
+        data = JSON.parse(responseText)
+        console.log('Parsed response data:', data)
+      } catch (parseError) {
+        console.error('Failed to parse response as JSON:', parseError)
+        throw new Error('Invalid response from server')
+      }
+
+      if (!res.ok) {
+        throw new Error(`HTTP error ${res.status}: ${data.detail || data.error || 'Unknown error'}`)
+      }
+
+      const razorpayOrder = data.order
+      console.log('Extracted razorpay order:', razorpayOrder)
+
+      if (!razorpayOrder) {
+        console.error('Order creation failed. Full response:', data)
+        throw new Error(`Order creation failed: ${data.error || 'No order data received'}`)
+      }
+
+      console.log('Razorpay order created successfully:', razorpayOrder)
+
+      // 2. Open Razorpay checkout popup
+      const options = {
+        key: "rzp_test_RH4BmBHMvm6ky4", // Replace with your actual Razorpay test key
+        amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency,
+        name: "Glonix Electronics",
+        description: "Secure Checkout",
+        order_id: razorpayOrder.id,
+        handler: async function (response: any) {
+          console.log('Payment response received:', response)
           
-          // Get existing user orders
-          const existingOrders = JSON.parse(localStorage.getItem(ordersKey) || "[]")
-          existingOrders.push(order)
-          localStorage.setItem(ordersKey, JSON.stringify(existingOrders))
-          
-          // Also save to global orders for admin view
-          const globalOrders = JSON.parse(localStorage.getItem("orders") || "[]")
-          globalOrders.push(order)
-          localStorage.setItem("orders", JSON.stringify(globalOrders))
-          
-          // Clear user-specific cart
-          localStorage.removeItem(cartKey)
-          
-          // Reset fabrication status to 0 (completed checkout)
-          AuthService.updateFabricationStatus(userId, 0)
-          
-          console.log("Order saved and cart cleared for user:", userId)
-        } catch (error) {
-          console.error("Failed to save order or clear cart:", error)
+          try {
+            // 3. Verify payment with backend
+            const verifyRes = await fetch("http://localhost:8000/verify-payment", {
+              method: "POST",
+              headers: { 
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+              },
+              body: JSON.stringify(response)
+            })
+            
+            if (!verifyRes.ok) {
+              throw new Error(`Verification HTTP error! status: ${verifyRes.status}`)
+            }
+            
+            const verifyData = await verifyRes.json()
+            console.log('Verification response:', verifyData)
+
+            if (verifyData.success) {
+              // Clear cart and redirect to success page
+              const userData = localStorage.getItem("current_user")
+              if (userData) {
+                const user = JSON.parse(userData)
+                localStorage.removeItem(`cart_${user.id}`)
+              }
+              
+              router.push(`/orders`)
+            } else {
+              alert(`Payment verification failed: ${verifyData.error || 'Unknown error'}`)
+            }
+          } catch (verifyError) {
+            console.error('Payment verification error:', verifyError)
+            alert(`Payment verification failed: ${verifyError.message}`)
+          }
+        },
+        prefill: {
+          name: `${shippingAddress.firstName} ${shippingAddress.lastName}`,
+          email: user?.email || '',
+          contact: shippingAddress.phone,
+        },
+        theme: { 
+          color: "#0f766e" 
+        },
+        modal: {
+          ondismiss: function() {
+            console.log('Razorpay popup dismissed')
+            setProcessing(false)
+          }
         }
       }
 
-      // Redirect to order confirmation
-      router.push(`/orders/${order.id}`)
-    } catch (error) {
-      console.error("Order processing failed:", error)
-      alert("Order processing failed. Please try again.")
-    } finally {
+      console.log('Opening Razorpay with options:', options)
+      const rzp = new window.Razorpay(options)
+      rzp.open()
+
+    } catch (err) {
+      console.error('Checkout error:', err)
+      alert(`Checkout failed: ${err.message}`)
       setProcessing(false)
     }
   }
@@ -301,256 +346,273 @@ function CheckoutContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-cyan-50 to-lime-50">
-      <div className="container mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="flex items-center gap-4 mb-8">
-          <Button variant="ghost" onClick={() => router.push("/cart")}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Cart
-          </Button>
-          <div>
-            <h1 className="font-heading font-bold text-3xl text-slate-900">Checkout</h1>
-            <p className="text-slate-600">Complete your order</p>
-          </div>
-        </div>
+    <>
+      {/* Razorpay Script */}
+      <Script
+        src="https://checkout.razorpay.com/v1/checkout.js"
+        onLoad={() => {
+          console.log('Razorpay script loaded successfully')
+          setRazorpayLoaded(true)
+        }}
+        onError={(e) => {
+          console.error('Failed to load Razorpay script:', e)
+          alert('Failed to load payment system. Please refresh the page.')
+        }}
+      />
 
-        <div className="grid lg:grid-cols-3 gap-8">
-          {/* Checkout Form */}
-          <div className="lg:col-span-2 space-y-8">
-            {/* Shipping Address */}
-            <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <MapPin className="h-5 w-5" />
-                  Shipping Address
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="firstName">First Name *</Label>
-                    <Input
-                      id="firstName"
-                      value={shippingAddress.firstName}
-                      onChange={(e) => setShippingAddress({ ...shippingAddress, firstName: e.target.value })}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="lastName">Last Name *</Label>
-                    <Input
-                      id="lastName"
-                      value={shippingAddress.lastName}
-                      onChange={(e) => setShippingAddress({ ...shippingAddress, lastName: e.target.value })}
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <Label htmlFor="company">Company (Optional)</Label>
-                  <Input
-                    id="company"
-                    value={shippingAddress.company}
-                    onChange={(e) => setShippingAddress({ ...shippingAddress, company: e.target.value })}
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="address1">Address Line 1 *</Label>
-                  <Input
-                    id="address1"
-                    value={shippingAddress.address1}
-                    onChange={(e) => setShippingAddress({ ...shippingAddress, address1: e.target.value })}
-                    required
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="address2">Address Line 2 (Optional)</Label>
-                  <Input
-                    id="address2"
-                    value={shippingAddress.address2}
-                    onChange={(e) => setShippingAddress({ ...shippingAddress, address2: e.target.value })}
-                  />
-                </div>
-
-                <div className="grid md:grid-cols-3 gap-4">
-                  <div>
-                    <Label htmlFor="city">City *</Label>
-                    <Input
-                      id="city"
-                      value={shippingAddress.city}
-                      onChange={(e) => setShippingAddress({ ...shippingAddress, city: e.target.value })}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="state">State *</Label>
-                    <Input
-                      id="state"
-                      value={shippingAddress.state}
-                      onChange={(e) => setShippingAddress({ ...shippingAddress, state: e.target.value })}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="zipCode">ZIP Code *</Label>
-                    <Input
-                      id="zipCode"
-                      value={shippingAddress.zipCode}
-                      onChange={(e) => setShippingAddress({ ...shippingAddress, zipCode: e.target.value })}
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <Label htmlFor="phone">Phone Number *</Label>
-                  <Input
-                    id="phone"
-                    type="tel"
-                    value={shippingAddress.phone}
-                    onChange={(e) => setShippingAddress({ ...shippingAddress, phone: e.target.value })}
-                    required
-                  />
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Shipping Method */}
-            <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Truck className="h-5 w-5" />
-                  Shipping Method
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <RadioGroup value={shippingMethod} onValueChange={setShippingMethod}>
-                  <div className="flex items-center space-x-2 p-4 border rounded-lg">
-                    <RadioGroupItem value="standard" id="standard" />
-                    <Label htmlFor="standard" className="flex-1 cursor-pointer">
-                      <div className="flex justify-between">
-                        <div>
-                          <div className="font-medium">Standard Shipping</div>
-                          <div className="text-sm text-slate-600">5-7 business days</div>
-                        </div>
-                        <div className="font-medium">$9.99</div>
-                      </div>
-                    </Label>
-                  </div>
-
-                  <div className="flex items-center space-x-2 p-4 border rounded-lg">
-                    <RadioGroupItem value="express" id="express" />
-                    <Label htmlFor="express" className="flex-1 cursor-pointer">
-                      <div className="flex justify-between">
-                        <div>
-                          <div className="font-medium">Express Shipping</div>
-                          <div className="text-sm text-slate-600">2-3 business days</div>
-                        </div>
-                        <div className="font-medium">$19.99</div>
-                      </div>
-                    </Label>
-                  </div>
-
-                  <div className="flex items-center space-x-2 p-4 border rounded-lg">
-                    <RadioGroupItem value="overnight" id="overnight" />
-                    <Label htmlFor="overnight" className="flex-1 cursor-pointer">
-                      <div className="flex justify-between">
-                        <div>
-                          <div className="font-medium">Overnight Shipping</div>
-                          <div className="text-sm text-slate-600">Next business day</div>
-                        </div>
-                        <div className="font-medium">$39.99</div>
-                      </div>
-                    </Label>
-                  </div>
-                </RadioGroup>
-              </CardContent>
-            </Card>
-
-            {/* Payment Method */}
-           
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-cyan-50 to-lime-50">
+        <div className="container mx-auto px-4 py-8">
+          {/* Header */}
+          <div className="flex items-center gap-4 mb-8">
+            <Button variant="ghost" onClick={() => router.push("/cart")}>
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back to Cart
+            </Button>
+            <div>
+              <h1 className="font-heading font-bold text-3xl text-slate-900">Checkout</h1>
+              <p className="text-slate-600">Complete your order</p>
+            </div>
           </div>
 
-          {/* Order Summary */}
-          <div className="space-y-6">
-            <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle>Order Summary</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {/* Order Items */}
-                <div className="space-y-3">
-                  {cartItems.map((item) => (
-                    <div key={item.id} className="flex gap-3">
-                      <img
-                        src={item.image || "/placeholder.svg"}
-                        alt={item.name}
-                        className="w-12 h-12 object-cover rounded"
+          <div className="grid lg:grid-cols-3 gap-8">
+            {/* Checkout Form */}
+            <div className="lg:col-span-2 space-y-8">
+              {/* Shipping Address */}
+              <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <MapPin className="h-5 w-5" />
+                    Shipping Address
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="firstName">First Name *</Label>
+                      <Input
+                        id="firstName"
+                        value={shippingAddress.firstName}
+                        onChange={(e) => setShippingAddress({ ...shippingAddress, firstName: e.target.value })}
+                        required
                       />
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm truncate">{item.name}</div>
-                        <div className="text-xs text-slate-500">Qty: {item.quantity}</div>
-                      </div>
-                      <div className="font-medium text-sm">${(item.price * item.quantity).toFixed(2)}</div>
                     </div>
-                  ))}
-                </div>
+                    <div>
+                      <Label htmlFor="lastName">Last Name *</Label>
+                      <Input
+                        id="lastName"
+                        value={shippingAddress.lastName}
+                        onChange={(e) => setShippingAddress({ ...shippingAddress, lastName: e.target.value })}
+                        required
+                      />
+                    </div>
+                  </div>
 
-                <Separator />
+                  <div>
+                    <Label htmlFor="company">Company (Optional)</Label>
+                    <Input
+                      id="company"
+                      value={shippingAddress.company}
+                      onChange={(e) => setShippingAddress({ ...shippingAddress, company: e.target.value })}
+                    />
+                  </div>
 
-                {/* Pricing */}
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span>Subtotal</span>
-                    <span>${subtotal.toFixed(2)}</span>
+                  <div>
+                    <Label htmlFor="address1">Address Line 1 *</Label>
+                    <Input
+                      id="address1"
+                      value={shippingAddress.address1}
+                      onChange={(e) => setShippingAddress({ ...shippingAddress, address1: e.target.value })}
+                      required
+                    />
                   </div>
-                  <div className="flex justify-between">
-                    <span>Shipping</span>
-                    <span>${shippingCost.toFixed(2)}</span>
+
+                  <div>
+                    <Label htmlFor="address2">Address Line 2 (Optional)</Label>
+                    <Input
+                      id="address2"
+                      value={shippingAddress.address2}
+                      onChange={(e) => setShippingAddress({ ...shippingAddress, address2: e.target.value })}
+                    />
                   </div>
-                  <div className="flex justify-between">
-                    <span>Tax</span>
-                    <span>${tax.toFixed(2)}</span>
+
+                  <div className="grid md:grid-cols-3 gap-4">
+                    <div>
+                      <Label htmlFor="city">City *</Label>
+                      <Input
+                        id="city"
+                        value={shippingAddress.city}
+                        onChange={(e) => setShippingAddress({ ...shippingAddress, city: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="state">State *</Label>
+                      <Input
+                        id="state"
+                        value={shippingAddress.state}
+                        onChange={(e) => setShippingAddress({ ...shippingAddress, state: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="zipCode">ZIP Code *</Label>
+                      <Input
+                        id="zipCode"
+                        value={shippingAddress.zipCode}
+                        onChange={(e) => setShippingAddress({ ...shippingAddress, zipCode: e.target.value })}
+                        required
+                      />
+                    </div>
                   </div>
+
+                  <div>
+                    <Label htmlFor="phone">Phone Number *</Label>
+                    <Input
+                      id="phone"
+                      type="tel"
+                      value={shippingAddress.phone}
+                      onChange={(e) => setShippingAddress({ ...shippingAddress, phone: e.target.value })}
+                      required
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Shipping Method */}
+              <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Truck className="h-5 w-5" />
+                    Shipping Method
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <RadioGroup value={shippingMethod} onValueChange={setShippingMethod}>
+                    <div className="flex items-center space-x-2 p-4 border rounded-lg">
+                      <RadioGroupItem value="standard" id="standard" />
+                      <Label htmlFor="standard" className="flex-1 cursor-pointer">
+                        <div className="flex justify-between">
+                          <div>
+                            <div className="font-medium">Standard Shipping</div>
+                            <div className="text-sm text-slate-600">5-7 business days</div>
+                          </div>
+                          <div className="font-medium">$9.99</div>
+                        </div>
+                      </Label>
+                    </div>
+
+                    <div className="flex items-center space-x-2 p-4 border rounded-lg">
+                      <RadioGroupItem value="express" id="express" />
+                      <Label htmlFor="express" className="flex-1 cursor-pointer">
+                        <div className="flex justify-between">
+                          <div>
+                            <div className="font-medium">Express Shipping</div>
+                            <div className="text-sm text-slate-600">2-3 business days</div>
+                          </div>
+                          <div className="font-medium">$19.99</div>
+                        </div>
+                      </Label>
+                    </div>
+
+                    <div className="flex items-center space-x-2 p-4 border rounded-lg">
+                      <RadioGroupItem value="overnight" id="overnight" />
+                      <Label htmlFor="overnight" className="flex-1 cursor-pointer">
+                        <div className="flex justify-between">
+                          <div>
+                            <div className="font-medium">Overnight Shipping</div>
+                            <div className="text-sm text-slate-600">Next business day</div>
+                          </div>
+                          <div className="font-medium">$39.99</div>
+                        </div>
+                      </Label>
+                    </div>
+                  </RadioGroup>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Order Summary */}
+            <div className="space-y-6">
+              <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
+                <CardHeader>
+                  <CardTitle>Order Summary</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Order Items */}
+                  <div className="space-y-3">
+                    {cartItems.map((item) => (
+                      <div key={item.id} className="flex gap-3">
+                        <img
+                          src={item.image || "/placeholder.svg"}
+                          alt={item.name}
+                          className="w-12 h-12 object-cover rounded"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm truncate">{item.name}</div>
+                          <div className="text-xs text-slate-500">Qty: {item.quantity}</div>
+                        </div>
+                        <div className="font-medium text-sm">${(item.price * item.quantity).toFixed(2)}</div>
+                      </div>
+                    ))}
+                  </div>
+
                   <Separator />
-                  <div className="flex justify-between font-bold text-lg">
-                    <span>Total</span>
-                    <span>${total.toFixed(2)}</span>
+
+                  {/* Pricing */}
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <span>Subtotal</span>
+                      <span>${subtotal.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Shipping</span>
+                      <span>${shippingCost.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Tax</span>
+                      <span>${tax.toFixed(2)}</span>
+                    </div>
+                    <Separator />
+                    <div className="flex justify-between font-bold text-lg">
+                      <span>Total</span>
+                      <span>${total.toFixed(2)}</span>
+                    </div>
                   </div>
-                </div>
 
-                <Button
-                  size="lg"
-                  className="w-full bg-gradient-to-r from-cyan-600 to-cyan-700 hover:from-cyan-700 hover:to-cyan-800"
-                  onClick={handlePlaceOrder}
-                  disabled={processing}
-                >
-                  {processing ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <Shield className="h-4 w-4 mr-2" />
-                      Place Order
-                    </>
-                  )}
-                </Button>
+                  <Button
+                    size="lg"
+                    className="w-full bg-gradient-to-r from-cyan-600 to-cyan-700 hover:from-cyan-700 hover:to-cyan-800"
+                    onClick={handlePlaceOrder}
+                    disabled={processing || !razorpayLoaded}
+                  >
+                    {processing ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                        Processing...
+                      </>
+                    ) : !razorpayLoaded ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                        Loading Payment System...
+                      </>
+                    ) : (
+                      <>
+                        <Shield className="h-4 w-4 mr-2" />
+                        Place Order
+                      </>
+                    )}
+                  </Button>
 
-                <div className="text-xs text-slate-500 text-center">
-                  Your payment information is secure and encrypted
-                </div>
-              </CardContent>
-            </Card>
+                  <div className="text-xs text-slate-500 text-center">
+                    Your payment information is secure and encrypted
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </>
   )
 }
 

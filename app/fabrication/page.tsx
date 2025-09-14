@@ -53,22 +53,36 @@ const Fabrication = () => {
     }
   };
 
-  useEffect(() => {
-    fetch("https://glonix-service-backend.vercel.app/getnextorderid")
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error("Network response was not ok");
-        }
-        return response.json();
-      })
-      .then((data) => {
-        console.log("Full API response:", data);
-        setOrderid(data.next_order_id);
-      })
-      .catch((error) => {
-        console.error("Error fetching order number:", error);
-      });
-  }, []);
+useEffect(() => {
+  // Generate a unique fabrication order ID with timestamp
+  const generateFabricationOrderId = () => {
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    return `FAB-${timestamp}-${random}`;
+  };
+
+  // You can still fetch the base order ID for reference if needed
+  fetch("https://glonix-service-backend.vercel.app/getnextorderid")
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error("Network response was not ok");
+      }
+      return response.json();
+    })
+    .then((data) => {
+      console.log("Base order ID from API:", data.next_order_id);
+      // Generate unique fabrication order ID
+      const fabricationOrderId = generateFabricationOrderId();
+      setOrderid(fabricationOrderId);
+      console.log("Generated fabrication order ID:", fabricationOrderId);
+    })
+    .catch((error) => {
+      console.error("Error fetching order number:", error);
+      // Fallback: generate order ID even if API fails
+      const fallbackOrderId = generateFabricationOrderId();
+      setOrderid(fallbackOrderId);
+    });
+}, []);
 
   const parallelaction = useCallback(async () => {
     if (!file || !username || !order_id) return;
@@ -770,7 +784,7 @@ const Fabrication = () => {
     }
 
     alert("✅ Quotation added to cart!");
-    router.push("/payment");
+    router.push("/cart");
     setUploadStatus("");
     setPcbImage({ top: "", bottom: "" });
     setFile(null);

@@ -21,8 +21,14 @@ app = FastAPI(title="Glonix Electronics API")
 # CORS middleware for frontend communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:3001"],
-    allow_credentials=True,
+    allow_origins=[
+        "http://localhost:3000", 
+        "http://localhost:5173", 
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",  # Add these
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3001"
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -32,8 +38,8 @@ db_manager = get_database()
 # Security
 SECRET_KEY = "SECRET_KEY"
 # Add Razorpay configuration (add to your environment variables)
-RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "your_razorpay_key_id")
-RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "your_razorpay_secret")
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "rzp_test_RH4BmBHMvm6ky4")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "GAVq0ULlZ00yg5Sc1oZpOjd8")
 
 # Initialize Razorpay client
 razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
@@ -268,6 +274,47 @@ class PaymentVerification(BaseModel):
     razorpay_signature: str
     order_data: OrderCreate
 
+
+
+# --------------------------------------------------------praveen
+class DBManager:
+    def __init__(self, db):
+        self.collection = db["orders"]
+
+    async def get_user_orders(self, user_id: str):
+        cursor = self.collection.find({"user_id": user_id})
+        orders = await cursor.to_list(length=None)
+        for order in orders:
+            order["_id"] = str(order["_id"])
+        return orders
+
+    async def get_all_orders(self):
+        cursor = self.collection.find({})
+        orders = await cursor.to_list(length=None)
+        for order in orders:
+            order["_id"] = str(order["_id"])
+        return orders
+
+# ------------------------praveen
+class OrderCreateWithPayment(BaseModel):
+    items: List[OrderItemModel]
+    shipping_address: AddressModel
+    billing_address: AddressModel
+    shipping_method: str
+    payment_method: str = "razorpay"
+    subtotal: float
+    shipping_cost: float
+    tax: float
+    total: float
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature:str
+
+
+class PaymentVerification(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature:str
 
 # Utility functions
 def verify_password(plain_password, hashed_password):
@@ -569,7 +616,32 @@ async def clear_cart(current_user: dict = Depends(get_current_user)):
     
     return {"message": "Cart cleared successfully"}
 
+# --------------------------praveen
 
+@app.get("/orders/my-orders")
+async def get_my_orders(current_user: dict = Depends(get_current_user)):
+    """Get orders for the current logged-in user"""
+    try:
+        user_id = str(current_user["_id"])
+        orders = await db_manager.get_user_orders(user_id)
+        return {"orders": orders}
+    except Exception as e:
+        print(f"Get my orders error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve user orders")
+
+
+@app.get("/orders")
+async def get_all_orders():
+    """Get all orders from the database (admin)"""
+    try:
+        orders = await db_manager.get_all_orders()
+        return {"orders": orders}
+    except Exception as e:
+        print(f"Get all orders error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve all orders")
+
+
+# ---------------------praveen
 
 
 
@@ -1195,7 +1267,170 @@ async def update_enquiry_status_admin(
     
     return {"message": "Enquiry status updated successfully"}
 
-# Health check endpoint
+@app.post("/create-razorpay-order")
+async def create_razorpay_order(
+    order_data: RazorpayOrderCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create Razorpay order"""
+    try:
+        # Convert amount to paise (Razorpay expects amount in smallest currency unit)
+        amount_in_paise = int(order_data.amount * 100)
+        
+        # Create order with Razorpay
+        razorpay_order = razorpay_client.order.create({
+            "amount": amount_in_paise,
+            "currency": order_data.currency,
+            "receipt": order_data.receipt or f"rcpt_{datetime.utcnow().timestamp()}",
+            "payment_capture": 1
+        })
+        
+        return {
+            "success": True,
+            "order": razorpay_order
+        }
+        
+    except Exception as e:
+        print(f"Razorpay order creation error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create Razorpay order")
+
+@app.post("/verify-payment")
+async def verify_payment(
+    payment_data: PaymentVerification,
+    current_user: dict = Depends(get_current_user)
+):
+    """Verify Razorpay payment"""
+    try:
+        # Verify payment signature
+        params_dict = {
+            'razorpay_order_id': payment_data.razorpay_order_id,
+            'razorpay_payment_id': payment_data.razorpay_payment_id,
+            'razorpay_signature': payment_data.razorpay_signature
+        }
+        
+        # Verify signature using Razorpay utility
+        razorpay_client.utility.verify_payment_signature(params_dict)
+        
+        return {
+            "success": True,
+            "message": "Payment verified successfully",
+            "payment_id": payment_data.razorpay_payment_id
+        }
+        
+    except Exception as e:
+        print(f"Payment verification error: {e}")
+        return {
+            "success": False,
+            "message": "Payment verification failed"
+        }
+
+
+@app.post("/create-order-with-payment")
+async def create_order_with_payment(
+    order_data: OrderCreateWithPayment,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create order after successful payment"""
+    try:
+        # First verify the payment
+        params_dict = {
+            'razorpay_order_id': order_data.razorpay_order_id,
+            'razorpay_payment_id': order_data.razorpay_payment_id,
+            'razorpay_signature': order_data.razorpay_signature
+        }
+        
+        # Verify signature
+        razorpay_client.utility.verify_payment_signature(params_dict)
+        
+        # Create order in database
+        order_db_data = {
+            "user_id": str(current_user["_id"]),
+            "items": [item.dict() for item in order_data.items],
+            "shipping_address": order_data.shipping_address.dict(),
+            "billing_address": order_data.billing_address.dict(),
+            "shipping_method": order_data.shipping_method,
+            "payment_method": "razorpay",
+            "subtotal": order_data.subtotal,
+            "shipping_cost": order_data.shipping_cost,
+            "tax": order_data.tax,
+            "total": order_data.total,
+            "status": "confirmed",
+            "payment_status": "completed",
+            "razorpay_order_id": order_data.razorpay_order_id,
+            "razorpay_payment_id": order_data.razorpay_payment_id,
+            "payment_verified": True
+        }
+        
+        order_id = db_manager.create_order(order_db_data)
+        
+        # Clear user's cart after successful order
+        db_manager.clear_user_cart(str(current_user["_id"]))
+        
+        return {
+            "success": True,
+            "order_id": order_id,
+            "message": "Order created successfully"
+        }
+        
+    except Exception as e:
+        print(f"Order creation error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create order")
+
+
+# Add this endpoint to your main.py file (around line 800, near your other Razorpay endpoints)
+
+# Add this to your main.py file
+
+@app.post("/create-order")
+async def create_order_endpoint(
+    order_data: RazorpayOrderCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create Razorpay order - matches frontend expectation"""
+    try:
+        print(f"=== BACKEND CREATE ORDER START ===")
+        print(f"User: {current_user.get('email', 'Unknown')}")
+        print(f"Order data: {order_data}")
+        print(f"Amount: {order_data.amount}")
+        print(f"Currency: {order_data.currency}")
+        print(f"Receipt: {order_data.receipt}")
+        
+        # Check Razorpay client
+        if not razorpay_client:
+            raise Exception("Razorpay client not initialized")
+        
+        # Convert amount to paise (Razorpay expects amount in smallest currency unit)
+        amount_in_paise = int(order_data.amount * 100)
+        print(f"Amount in paise: {amount_in_paise}")
+        
+        # Create order with Razorpay
+        razorpay_order = razorpay_client.order.create({
+            "amount": amount_in_paise,
+            "currency": order_data.currency,
+            "receipt": order_data.receipt or f"rcpt_{int(datetime.utcnow().timestamp())}",
+            "payment_capture": 1
+        })
+        
+        print(f"Razorpay order created successfully: {razorpay_order}")
+        
+        return {
+            "success": True,
+            "order": razorpay_order
+        }
+        
+    except Exception as e:
+        print(f"=== BACKEND ERROR ===")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        
+        # Return error response
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create order: {str(e)}"
+        )
+        # Health check endpoint
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow()}
