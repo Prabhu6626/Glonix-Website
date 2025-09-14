@@ -6,9 +6,15 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 import os
+import razorpay
 from typing import List, Dict, Any
 from typing import Optional, List, Dict, Any
 from database import get_database
+import razorpay
+import hashlib
+import hmac
+from datetime import datetime, timedelta
+from typing import Optional
 
 app = FastAPI(title="Glonix Electronics API")
 
@@ -24,6 +30,14 @@ app.add_middleware(
 db_manager = get_database()
 
 # Security
+SECRET_KEY = "SECRET_KEY"
+# Add Razorpay configuration (add to your environment variables)
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "your_razorpay_key_id")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "your_razorpay_secret")
+
+# Initialize Razorpay client
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours
@@ -164,7 +178,6 @@ class OrderResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
-
 # Order Management Models
 class AddressModel(BaseModel):
     first_name: str
@@ -197,7 +210,13 @@ class OrderCreate(BaseModel):
     tax: float
     total: float
 
- # Add these models and routes to your existing main.py
+# Cart Models
+class CartItem(BaseModel):
+    product_id: str
+    quantity: int
+
+class CartUpdate(BaseModel):
+    items: List[CartItem]
 
 # Enquiry Models
 class EnquiryCreate(BaseModel):
@@ -235,7 +254,20 @@ class EnquiryReply(BaseModel):
 
 class EnquiryStatusUpdate(BaseModel):
     status: str  # "new", "in_progress", "replied", "completed", "closed"
-   
+
+
+# Add these models to your main.py
+class RazorpayOrderCreate(BaseModel):
+    amount: float
+    currency: str = "INR"
+    receipt: Optional[str] = None
+
+class PaymentVerification(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+    order_data: OrderCreate
+
 
 # Utility functions
 def verify_password(plain_password, hashed_password):
@@ -272,8 +304,6 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     if user is None:
         raise credentials_exception
     return user
-
-
 
 # Initialize admin user
 def initialize_admin():
@@ -380,6 +410,243 @@ async def read_users_me(current_user: dict = Depends(get_current_user)):
 async def verify_token(current_user: dict = Depends(get_current_user)):
     return {"valid": True, "user": current_user["email"]}
 
+# PUBLIC PRODUCT ENDPOINTS (for customers)
+@app.get("/products", response_model=Dict[str, Any])
+async def get_products_public(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    category: Optional[str] = None,
+    search: Optional[str] = None
+):
+    """Get products for public/customer view"""
+    products = db_manager.get_all_products(skip, limit, category, search)
+    total = db_manager.get_products_count(category, search)
+    
+    product_responses = []
+    for product in products:
+        product_responses.append(ProductResponse(
+            id=product["_id"],
+            name=product["name"],
+            sku=product["sku"],
+            category=product["category"],
+            price=product["price"],
+            image=product.get("image", ""),
+            images=product.get("images", []),
+            description=product["description"],
+            long_description=product.get("long_description"),
+            inStock=product.get("inStock", True),
+            stock_quantity=product.get("stock_quantity", 0),
+            rating=product.get("rating", 0.0),
+            reviews=product.get("reviews", 0),
+            specifications=product.get("specifications", {}),
+            features=product.get("features", []),
+            applications=product.get("applications", []),
+            created_at=product["created_at"],
+            updated_at=product["updated_at"]
+        ))
+    
+    return {
+        "products": product_responses,
+        "total": total,
+        "skip": skip,
+        "limit": limit
+    }
+
+@app.get("/products/{product_id}")
+async def get_product_public(product_id: str):
+    """Get single product for public view"""
+    product = db_manager.get_product_by_id(product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    return ProductResponse(
+        id=product["_id"],
+        name=product["name"],
+        sku=product["sku"],
+        category=product["category"],
+        price=product["price"],
+        image=product.get("image", ""),
+        images=product.get("images", []),
+        description=product["description"],
+        long_description=product.get("long_description"),
+        inStock=product.get("inStock", True),
+        stock_quantity=product.get("stock_quantity", 0),
+        rating=product.get("rating", 0.0),
+        reviews=product.get("reviews", 0),
+        specifications=product.get("specifications", {}),
+        features=product.get("features", []),
+        applications=product.get("applications", []),
+        created_at=product["created_at"],
+        updated_at=product["updated_at"]
+    )
+
+# CART ENDPOINTS
+@app.get("/cart")
+async def get_cart(current_user: dict = Depends(get_current_user)):
+    """Get user's cart"""
+    cart = db_manager.get_user_cart(str(current_user["_id"]))
+    return {"cart": cart}
+
+@app.post("/cart/add")
+async def add_to_cart(
+    cart_item: CartItem,
+    current_user: dict = Depends(get_current_user)
+):
+    """Add item to cart"""
+    user_id = str(current_user["_id"])
+    
+    # Get current cart
+    cart = db_manager.get_user_cart(user_id)
+    items = cart.get("items", [])
+    
+    # Check if item already exists in cart
+    existing_item = next((item for item in items if item["product_id"] == cart_item.product_id), None)
+    
+    if existing_item:
+        # Update quantity
+        existing_item["quantity"] += cart_item.quantity
+    else:
+        # Add new item
+        # Get product details
+        product = db_manager.get_product_by_id(cart_item.product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        
+        items.append({
+            "product_id": cart_item.product_id,
+            "product_name": product["name"],
+            "product_sku": product["sku"],
+            "price": product["price"],
+            "quantity": cart_item.quantity,
+            "image": product.get("image", "")
+        })
+    
+    # Update cart
+    success = db_manager.update_user_cart(user_id, items)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update cart")
+    
+    return {"message": "Item added to cart successfully"}
+
+@app.put("/cart/update")
+async def update_cart(
+    cart_update: CartUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update cart items"""
+    user_id = str(current_user["_id"])
+    
+    # Convert CartUpdate to cart items with product details
+    items = []
+    for cart_item in cart_update.items:
+        if cart_item.quantity <= 0:
+            continue  # Skip items with zero quantity
+            
+        product = db_manager.get_product_by_id(cart_item.product_id)
+        if product:
+            items.append({
+                "product_id": cart_item.product_id,
+                "product_name": product["name"],
+                "product_sku": product["sku"],
+                "price": product["price"],
+                "quantity": cart_item.quantity,
+                "image": product.get("image", "")
+            })
+    
+    success = db_manager.update_user_cart(user_id, items)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update cart")
+    
+    return {"message": "Cart updated successfully"}
+
+@app.delete("/cart/clear")
+async def clear_cart(current_user: dict = Depends(get_current_user)):
+    """Clear user's cart"""
+    user_id = str(current_user["_id"])
+    success = db_manager.clear_user_cart(user_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to clear cart")
+    
+    return {"message": "Cart cleared successfully"}
+
+
+
+
+
+# CUSTOMER ORDER ENDPOINTS
+@app.post("/orders")
+async def create_order(order: OrderCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new order"""
+    try:
+        # Prepare order data
+        order_data = {
+            "user_id": str(current_user["_id"]),
+            "items": [item.dict() for item in order.items],
+            "shipping_address": order.shipping_address.dict(),
+            "billing_address": order.billing_address.dict(),
+            "shipping_method": order.shipping_method,
+            "payment_method": order.payment_method,
+            "subtotal": order.subtotal,
+            "shipping_cost": order.shipping_cost,
+            "tax": order.tax,
+            "total": order.total,
+            "status": "pending",
+            "payment_status": "pending"
+        }
+        
+        # Create order in database
+        order_id = db_manager.create_order(order_data)
+        
+        # Update user's fabrication status to 2 (added to cart/ordered)
+        db_manager.update_user(str(current_user["_id"]), {"fabrication_status": 2})
+        
+        # Clear user's cart after successful order
+        db_manager.clear_user_cart(str(current_user["_id"]))
+        
+        return {"success": True, "order_id": order_id, "message": "Order created successfully"}
+        
+    except Exception as e:
+        print(f"Order creation error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create order")
+
+@app.get("/orders/my-orders")
+async def get_my_orders(current_user: dict = Depends(get_current_user)):
+    """Get orders for the current user"""
+    try:
+        # Get user's orders from database
+        user_id = str(current_user["_id"])
+        orders = db_manager.get_user_orders(user_id)
+        
+        return {"orders": orders}
+        
+    except Exception as e:
+        print(f"Get orders error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve orders")
+
+@app.get("/orders/{order_id}")
+async def get_order_by_id(order_id: str, current_user: dict = Depends(get_current_user)):
+    """Get specific order by ID"""
+    try:
+        order = db_manager.get_order_by_id(order_id)
+        
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+            
+        # Check if user owns this order or is admin
+        if order.get("user_id") != str(current_user["_id"]) and current_user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Access denied")
+            
+        return {"order": order}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Get order error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve order")
+
+# Continue with all other existing routes...
+# [Previous code continues with auth, projects, contact, etc.]
+
 @app.put("/auth/fabrication-status")
 async def update_fabrication_status(
     update_data: FabricationStatusUpdate,
@@ -401,19 +668,6 @@ async def update_fabrication_status(
         raise HTTPException(status_code=404, detail="User not found")
     
     return {"message": "Fabrication status updated successfully"}
-
-@app.get("/auth/users-by-fabrication-status")
-async def get_users_by_fabrication_status(
-    status: int,
-    current_user: dict = Depends(get_current_user)
-):
-    """Get users by fabrication status (admin only)"""
-    if current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    # This would need to be implemented in the database manager
-    # For now, return empty list
-    return {"users": []}
 
 @app.post("/projects")
 async def create_project(project: ProjectCreate, current_user: dict = Depends(get_current_user)):
@@ -474,137 +728,6 @@ async def get_component_categories(current_user: dict = Depends(get_current_user
     categories = db_manager.get_component_categories()
     return {"categories": categories}
 
-@app.get("/analytics/users")
-async def get_user_analytics(current_user: dict = Depends(get_current_user)):
-    """Get user analytics (admin only)"""
-    # Check if user is admin
-    if current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    stats = db_manager.get_user_stats()
-    return {"user_stats": stats}
-
-@app.get("/analytics/projects")
-async def get_project_analytics(current_user: dict = Depends(get_current_user)):
-    """Get project analytics (admin only)"""
-    # Check if user is admin
-    if current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    stats = db_manager.get_project_stats()
-    return {"project_stats": stats}
-
-# CUSTOMER CART MANAGEMENT
-@app.post("/cart/add")
-async def add_to_cart(
-    item: CartItemModel,
-    current_user: dict = Depends(get_current_user)
-):
-    """Add item to user's cart"""
-    try:
-        user_id = str(current_user["_id"])
-        
-        # Update user's fabrication status to 2 (added to cart)
-        db_manager.update_user(user_id, {"fabrication_status": 2})
-        
-        # Get product details
-        product = db_manager.get_product_by_id(item.product_id)
-        if not product:
-            raise HTTPException(status_code=404, detail="Product not found")
-        
-        # Store cart in user document
-        user = db_manager.get_user_by_id(user_id)
-        current_cart = user.get("cart", [])
-        
-        # Check if item already in cart
-        existing_item = next((i for i in current_cart if i["product_id"] == item.product_id), None)
-        
-        if existing_item:
-            existing_item["quantity"] += item.quantity
-        else:
-            current_cart.append({
-                "product_id": item.product_id,
-                "product_name": product["name"],
-                "product_sku": product["sku"],
-                "price": product["price"],
-                "quantity": item.quantity,
-                "image": product.get("image", "")
-            })
-        
-        # Update user's cart
-        db_manager.update_user(user_id, {"cart": current_cart})
-        
-        return {"success": True, "message": "Item added to cart"}
-        
-    except Exception as e:
-        print(f"Add to cart error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to add item to cart")
-
-@app.get("/cart")
-async def get_cart(current_user: dict = Depends(get_current_user)):
-    """Get user's cart"""
-    try:
-        user_id = str(current_user["_id"])
-        user = db_manager.get_user_by_id(user_id)
-        cart = user.get("cart", [])
-        
-        return {"cart": cart}
-        
-    except Exception as e:
-        print(f"Get cart error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get cart")
-
-@app.put("/cart")
-async def update_cart(
-    cart_update: CartUpdateModel,
-    current_user: dict = Depends(get_current_user)
-):
-    """Update user's cart"""
-    try:
-        user_id = str(current_user["_id"])
-        
-        # Convert cart items to detailed format
-        cart_items = []
-        for item in cart_update.items:
-            product = db_manager.get_product_by_id(item.product_id)
-            if product:
-                cart_items.append({
-                    "product_id": item.product_id,
-                    "product_name": product["name"],
-                    "product_sku": product["sku"],
-                    "price": product["price"],
-                    "quantity": item.quantity,
-                    "image": product.get("image", "")
-                })
-        
-        # Update fabrication status based on cart contents
-        status = 2 if cart_items else 0
-        db_manager.update_user(user_id, {
-            "cart": cart_items,
-            "fabrication_status": status
-        })
-        
-        return {"success": True, "message": "Cart updated"}
-        
-    except Exception as e:
-        print(f"Update cart error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update cart")
-
-@app.delete("/cart")
-async def clear_cart(current_user: dict = Depends(get_current_user)):
-    """Clear user's cart"""
-    try:
-        user_id = str(current_user["_id"])
-        db_manager.update_user(user_id, {
-            "cart": [],
-            "fabrication_status": 0
-        })
-        
-        return {"success": True, "message": "Cart cleared"}
-        
-    except Exception as e:
-        print(f"Clear cart error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to clear cart")
 # ADMIN USER MANAGEMENT ROUTES
 @app.get("/admin/users", response_model=Dict[str, Any])
 async def get_all_users_admin(
@@ -638,77 +761,6 @@ async def get_all_users_admin(
         "limit": limit
     }
 
-
-# CUSTOMER ORDER ENDPOINTS
-@app.post("/orders")
-async def create_order(order: OrderCreate, current_user: dict = Depends(get_current_user)):
-    """Create a new order"""
-    try:
-        # Prepare order data
-        order_data = {
-            "user_id": str(current_user["_id"]),
-            "items": [item.dict() for item in order.items],
-            "shipping_address": order.shipping_address.dict(),
-            "billing_address": order.billing_address.dict(),
-            "shipping_method": order.shipping_method,
-            "payment_method": order.payment_method,
-            "subtotal": order.subtotal,
-            "shipping_cost": order.shipping_cost,
-            "tax": order.tax,
-            "total": order.total,
-            "status": "pending",
-            "payment_status": "pending"
-        }
-        
-        # Create order in database
-        order_id = db_manager.create_order(order_data)
-        
-        # Update user's fabrication status to 2 (added to cart/ordered)
-        db_manager.update_user(str(current_user["_id"]), {"fabrication_status": 2})
-        
-        return {"success": True, "order_id": order_id, "message": "Order created successfully"}
-        
-    except Exception as e:
-        print(f"Order creation error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create order")
-
-@app.get("/orders/my-orders")
-async def get_my_orders(current_user: dict = Depends(get_current_user)):
-    """Get orders for the current user"""
-    try:
-        # Get user's orders from database
-        user_id = str(current_user["_id"])
-        orders = db_manager.get_user_orders(user_id)
-        
-        return {"orders": orders}
-        
-    except Exception as e:
-        print(f"Get orders error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve orders")
-
-@app.get("/orders/{order_id}")
-async def get_order_by_id(order_id: str, current_user: dict = Depends(get_current_user)):
-    """Get specific order by ID"""
-    try:
-        order = db_manager.get_order_by_id(order_id)
-        
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
-            
-        # Check if user owns this order or is admin
-        if order.get("user_id") != str(current_user["_id"]) and current_user.get("role") != "admin":
-            raise HTTPException(status_code=403, detail="Access denied")
-            
-        return {"order": order}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Get order error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve order")
-
-
-
 @app.put("/admin/users/{user_id}")
 async def update_user_admin(
     user_id: str,
@@ -740,31 +792,37 @@ async def delete_user_admin(
         raise HTTPException(status_code=404, detail="User not found")
     
     return {"message": "User deleted successfully"}
-
 @app.get("/admin/users/fabrication-status/{status}")
-async def get_users_by_fabrication_status_admin(
+async def get_users_by_fabrication_status(
     status: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
     current_user: dict = Depends(admin_required)
 ):
     """Get users by fabrication status (admin only)"""
-    users = db_manager.get_users_by_fabrication_status(status)
-    
-    user_responses = []
-    for user in users:
-        user_responses.append(UserResponse(
-            id=user["_id"],
-            email=user["email"],
-            full_name=user["full_name"],
-            company=user.get("company"),
-            phone=user.get("phone"),
-            role=user.get("role", "customer"),
-            is_active=user.get("is_active", True),
-            fabrication_status=user.get("fabrication_status", 0),
-            created_at=user["created_at"],
-            updated_at=user.get("updated_at")
-        ))
-    
-    return {"users": user_responses}
+    try:
+        # Validate status
+        if status not in [0, 1, 2]:
+            raise HTTPException(status_code=400, detail="Status must be 0, 1, or 2")
+        
+        # Use the database method to get users by fabrication status
+        users = db_manager.get_users_by_fabrication_status(status)
+        
+        # Apply pagination
+        start_idx = skip
+        end_idx = min(skip + limit, len(users))
+        paginated_users = users[start_idx:end_idx]
+        
+        return {
+            "users": paginated_users,
+            "total": len(users),
+            "skip": skip,
+            "limit": limit
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get users by fabrication status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve users")
 
 # ADMIN PRODUCT MANAGEMENT ROUTES
 @app.get("/admin/products", response_model=Dict[str, Any])
@@ -946,6 +1004,16 @@ async def get_admin_analytics(
 ):
     """Get admin dashboard analytics"""
     stats = db_manager.get_admin_stats()
+    
+    # Add enquiry stats
+    try:
+        total_enquiries = db_manager.get_enquiries_count()
+        new_enquiries = db_manager.get_enquiries_count(status="new")
+        design_enquiries = db_manager.get_enquiries_count(enquiry_type="design_enquiry")
+        product_enquiries = db_manager.get_enquiries_count(enquiry_type="product_enquiry")
+    except:
+        total_enquiries = new_enquiries = design_enquiries = product_enquiries = 0
+    
     return {
         "totalUsers": stats.get("total_users", 0),
         "totalProducts": stats.get("total_products", 0),
@@ -954,10 +1022,13 @@ async def get_admin_analytics(
         "pendingOrders": stats.get("pending_orders", 0),
         "lowStockProducts": stats.get("low_stock_products", 0),
         "newMessages": stats.get("new_messages", 0),
-        "newQuotes": stats.get("new_quotes", 0)
+        "newQuotes": stats.get("new_quotes", 0),
+        "totalEnquiries": total_enquiries,
+        "newEnquiries": new_enquiries,
+        "designEnquiries": design_enquiries,
+        "productEnquiries": product_enquiries
     }
 
-# ADMIN CONTACT MESSAGES
 @app.get("/admin/messages")
 async def get_contact_messages_admin(
     skip: int = Query(0, ge=0),
@@ -974,7 +1045,6 @@ async def get_contact_messages_admin(
         "skip": skip,
         "limit": limit
     }
-
 
 # CUSTOMER ENQUIRY ENDPOINTS
 @app.post("/enquiries")
@@ -1124,41 +1194,6 @@ async def update_enquiry_status_admin(
         raise HTTPException(status_code=404, detail="Enquiry not found")
     
     return {"message": "Enquiry status updated successfully"}
-
-# Update the admin stats to include enquiries
-@app.get("/admin/analytics/overview")
-async def get_admin_analytics(
-    current_user: dict = Depends(admin_required)
-):
-    """Get admin dashboard analytics"""
-    stats = db_manager.get_admin_stats()
-    
-    # Add enquiry stats
-    total_enquiries = db_manager.get_enquiries_count()
-    new_enquiries = db_manager.get_enquiries_count(status="new")
-    design_enquiries = db_manager.get_enquiries_count(enquiry_type="design_enquiry")
-    product_enquiries = db_manager.get_enquiries_count(enquiry_type="product_enquiry")
-    
-    # Add user behavior stats
-    visited_users = len(db_manager.get_users_who_visited())
-    cart_users = len(db_manager.get_users_with_cart_items())
-    
-    return {
-        "totalUsers": stats.get("total_users", 0),
-        "totalProducts": stats.get("total_products", 0),
-        "totalOrders": stats.get("total_orders", 0),
-        "totalRevenue": stats.get("total_revenue", 0.0),
-        "pendingOrders": stats.get("pending_orders", 0),
-        "lowStockProducts": stats.get("low_stock_products", 0),
-        "newMessages": stats.get("new_messages", 0),
-        "newQuotes": stats.get("new_quotes", 0),
-        "totalEnquiries": total_enquiries,
-        "newEnquiries": new_enquiries,
-        "designEnquiries": design_enquiries,
-        "productEnquiries": product_enquiries,
-        "visitedUsers": visited_users,
-        "cartUsers": cart_users
-    }
 
 # Health check endpoint
 @app.get("/health")

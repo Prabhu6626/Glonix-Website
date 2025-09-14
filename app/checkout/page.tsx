@@ -41,7 +41,8 @@ interface BillingAddress extends ShippingAddress {}
 function CheckoutContent() {
   const router = useRouter()
   const { user } = useAuth()
-  const { items: cartItems, loading, clearCart } = useCart()
+  const [cartItems, setCartItems] = useState<CartItem[]>([])
+  const [loading, setLoading] = useState(true)
   const [processing, setProcessing] = useState(false)
 
   // Form states
@@ -81,6 +82,85 @@ function CheckoutContent() {
   const [cvv, setCvv] = useState("")
   const [cardName, setCardName] = useState("")
 
+  useEffect(() => {
+    // Load user-specific cart from localStorage
+    const loadUserCart = () => {
+      const userData = localStorage.getItem("current_user")
+      console.log("Checkout loading - userData:", userData)
+      
+      if (!userData) {
+        console.log("No user data found, clearing cart")
+        setCartItems([])
+        setLoading(false)
+        return
+      }
+
+      try {
+        const user = JSON.parse(userData)
+        const userId = user.id
+        const cartKey = `cart_${userId}`
+        console.log("Loading cart for user:", userId, "with key:", cartKey)
+        
+        const storedCart = localStorage.getItem(cartKey)
+        console.log("Stored cart data:", storedCart)
+        
+        if (storedCart) {
+          const parsedCart = JSON.parse(storedCart)
+          console.log("Parsed cart:", parsedCart)
+          
+          // Handle both array format (new) and single object format (legacy)
+          if (Array.isArray(parsedCart)) {
+            console.log("Setting array cart items:", parsedCart)
+            setCartItems(parsedCart)
+          } else if (parsedCart && typeof parsedCart === 'object') {
+            // Convert single quotation object to cart item format
+            const cartItem: CartItem = {
+              id: parsedCart.order_id || `quotation-${Date.now()}`,
+              name: `PCB Fabrication - ${parsedCart.Layers} layers`,
+              sku: `PCB-${parsedCart.Layers}-${parsedCart.Thickness}`,
+              price: parseFloat(parsedCart.price) || 0,
+              image: parsedCart.File_Url || "/placeholder-pcb.png",
+              quantity: 1
+            }
+            console.log("Converting single object to cart item:", cartItem)
+            setCartItems([cartItem])
+          }
+        } else {
+          console.log("No stored cart found for user")
+          setCartItems([])
+        }
+      } catch (error) {
+        console.error("Failed to parse user or cart data:", error)
+        setCartItems([])
+      }
+      
+      setLoading(false)
+    }
+
+    loadUserCart()
+
+    // Listen for storage changes (user login/logout)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "current_user") {
+        loadUserCart()
+      }
+    }
+
+    window.addEventListener("storage", handleStorageChange)
+    
+    // Also listen for custom events (for same-tab changes)
+    const handleUserChange = () => {
+      loadUserCart()
+    }
+
+    window.addEventListener("userChanged", handleUserChange)
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange)
+      window.removeEventListener("userChanged", handleUserChange)
+    }
+  }, [])
+
   const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
   const shippingCost = shippingMethod === "express" ? 19.99 : shippingMethod === "overnight" ? 39.99 : 9.99
   const tax = subtotal * 0.08
@@ -90,8 +170,16 @@ function CheckoutContent() {
     setProcessing(true)
 
     try {
-      // Prepare order data for API
-      const orderData = {
+      // Simulate order processing
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+
+      // Create order object with proper structure matching Order interface
+      const order = {
+        id: `order-${Date.now()}`,
+        order_number: `ORD-${new Date().getFullYear()}-${String(Date.now()).slice(-3)}`,
+        user_id: user?.id || "",
+        user_name: user?.full_name || "",
+        user_email: user?.email || "",
         items: cartItems.map(item => ({
           product_id: item.id,
           product_name: item.name,
@@ -140,28 +228,50 @@ function CheckoutContent() {
         subtotal,
         shipping_cost: shippingCost,
         tax,
-        total
+        total,
+        status: "confirmed" as const,
+        payment_status: "completed" as const,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        estimated_delivery: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
       }
 
-      // Create order via API
-      const result = await CustomerApiService.createOrder(orderData)
-      
-      if (result.success) {
-        // Clear cart after successful order
-        await clearCart()
-        
-        // Redirect to order confirmation
-        router.push(`/orders/${result.order_id}`)
-      } else {
-        throw new Error(result.error || "Order creation failed")
+      // Save order to user-specific localStorage and clear cart
+      const userData = localStorage.getItem("current_user")
+      if (userData) {
+        try {
+          const user = JSON.parse(userData)
+          const userId = user.id
+          const ordersKey = `orders_${userId}`
+          const cartKey = `cart_${userId}`
+          
+          // Get existing user orders
+          const existingOrders = JSON.parse(localStorage.getItem(ordersKey) || "[]")
+          existingOrders.push(order)
+          localStorage.setItem(ordersKey, JSON.stringify(existingOrders))
+          
+          // Also save to global orders for admin view
+          const globalOrders = JSON.parse(localStorage.getItem("orders") || "[]")
+          globalOrders.push(order)
+          localStorage.setItem("orders", JSON.stringify(globalOrders))
+          
+          // Clear user-specific cart
+          localStorage.removeItem(cartKey)
+          
+          // Reset fabrication status to 0 (completed checkout)
+          AuthService.updateFabricationStatus(userId, 0)
+          
+          console.log("Order saved and cart cleared for user:", userId)
+        } catch (error) {
+          console.error("Failed to save order or clear cart:", error)
+        }
       }
+
+      // Redirect to order confirmation
+      router.push(`/orders/${order.id}`)
     } catch (error) {
       console.error("Order processing failed:", error)
-      toast({
-        variant: "destructive",
-        title: "Order Failed",
-        description: error instanceof Error ? error.message : "Please try again."
-      })
+      alert("Order processing failed. Please try again.")
     } finally {
       setProcessing(false)
     }
@@ -362,57 +472,7 @@ function CheckoutContent() {
             </Card>
 
             {/* Payment Method */}
-            <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <CreditCard className="h-5 w-5" />
-                  Payment Information
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <Label htmlFor="cardName">Cardholder Name *</Label>
-                  <Input id="cardName" value={cardName} onChange={(e) => setCardName(e.target.value)} required />
-                </div>
-
-                <div>
-                  <Label htmlFor="cardNumber">Card Number *</Label>
-                  <Input
-                    id="cardNumber"
-                    placeholder="1234 5678 9012 3456"
-                    value={cardNumber}
-                    onChange={(e) => setCardNumber(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="expiryDate">Expiry Date *</Label>
-                    <Input
-                      id="expiryDate"
-                      placeholder="MM/YY"
-                      value={expiryDate}
-                      onChange={(e) => setExpiryDate(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="cvv">CVV *</Label>
-                    <Input id="cvv" placeholder="123" value={cvv} onChange={(e) => setCvv(e.target.value)} required />
-                  </div>
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="sameAsShipping"
-                    checked={sameAsShipping}
-                    onCheckedChange={(checked) => setSameAsShipping(checked as boolean)}
-                  />
-                  <Label htmlFor="sameAsShipping">Billing address same as shipping address</Label>
-                </div>
-              </CardContent>
-            </Card>
+           
           </div>
 
           {/* Order Summary */}

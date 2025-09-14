@@ -283,7 +283,6 @@ const HomePage = () => {
         </div>
       </section>
 
-      CTA Section
       <section className="py-20 gradient-primary text-primary-foreground">
         <div className="container mx-auto px-4 text-center">
           <h2 className="font-heading font-bold text-4xl mb-6">Ready to Start Your Next Project?</h2>

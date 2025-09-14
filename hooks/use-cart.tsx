@@ -1,190 +1,155 @@
+// Create hooks/use-cart.tsx
 "use client"
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
-import { CustomerApiService } from "@/lib/customer-api"
-import { AuthService } from "@/lib/auth"
+import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import { useAuth } from './use-auth'
 
 interface CartItem {
-  id: string
+  product_id: string
   name: string
   sku: string
   price: number
   image: string
   quantity: number
-  inStock: boolean
 }
 
 interface CartContextType {
   items: CartItem[]
-  itemCount: number
-  totalPrice: number
-  addItem: (item: Omit<CartItem, "quantity">) => void
-  removeItem: (id: string) => void
-  updateQuantity: (id: string, quantity: number) => void
+  addItem: (item: Omit<CartItem, 'quantity'>) => void
+  removeItem: (productId: string) => void
+  updateQuantity: (productId: string, quantity: number) => void
   clearCart: () => void
+  total: number
+  itemCount: number
   loading: boolean
-  refreshCart: () => Promise<void>
 }
 
-const CartContext = createContext<CartContextType | null>(null)
+const CartContext = createContext<CartContextType | undefined>(undefined)
 
 export function CartProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const { user, isAuthenticated } = useAuth()
 
-  // Load cart from MongoDB via API
   useEffect(() => {
-    const loadUserCart = async () => {
-      if (!AuthService.isAuthenticated()) {
-        setItems([])
-        return
-      }
+    loadCart()
+  }, [user, isAuthenticated])
 
-      setLoading(true)
-      try {
-        const cartData = await CustomerApiService.getCart()
-        
-        // Convert API cart format to component format
-        const cartItems: CartItem[] = cartData.map((item: any) => ({
-          id: item.product_id,
-          name: item.product_name,
-          sku: item.product_sku,
-          price: item.price,
-          image: item.image,
-          quantity: item.quantity,
-          inStock: true // Will be validated on checkout
-        }))
-        
-        setItems(cartItems)
-      } catch (error) {
-        console.error("Failed to load cart:", error)
-        setItems([])
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    loadUserCart()
-
-    // Also listen for custom events (for same-tab changes)
-    const handleUserChange = () => {
-      loadUserCart()
-    }
-
-    window.addEventListener("userChanged", handleUserChange)
-
-    return () => {
-      window.removeEventListener("userChanged", handleUserChange)
-    }
-  }, [])
-
-  const refreshCart = async () => {
-    if (!AuthService.isAuthenticated()) {
+  const loadCart = async () => {
+    if (!isAuthenticated || !user) {
       setItems([])
+      setLoading(false)
       return
     }
 
-    setLoading(true)
     try {
-      const cartData = await CustomerApiService.getCart()
-      
-      const cartItems: CartItem[] = cartData.map((item: any) => ({
-        id: item.product_id,
-        name: item.product_name,
-        sku: item.product_sku,
-        price: item.price,
-        image: item.image,
-        quantity: item.quantity,
-        inStock: true
-      }))
-      
-      setItems(cartItems)
+      const token = localStorage.getItem('access_token')
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/cart`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setItems(data.cart.items || [])
+      }
     } catch (error) {
-      console.error("Failed to refresh cart:", error)
+      console.error('Failed to load cart:', error)
     } finally {
       setLoading(false)
     }
   }
 
-  const addItem = async (newItem: Omit<CartItem, "quantity">) => {
+  const saveCart = async (cartItems: CartItem[]) => {
+    if (!isAuthenticated || !user) return
+
     try {
-      const success = await CustomerApiService.addToCart(newItem.id, 1)
-      if (success) {
-        await refreshCart()
-      }
+      const token = localStorage.getItem('access_token')
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL}/cart`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ items: cartItems }),
+      })
     } catch (error) {
-      console.error("Failed to add item to cart:", error)
+      console.error('Failed to save cart:', error)
     }
   }
 
-  const removeItem = async (id: string) => {
-    try {
-      const updatedItems = items.filter(item => item.id !== id)
-      const cartItems = updatedItems.map(item => ({
-        product_id: item.id,
-        quantity: item.quantity
-      }))
-      
-      const success = await CustomerApiService.updateCart(cartItems)
-      if (success) {
-        await refreshCart()
-      }
-    } catch (error) {
-      console.error("Failed to remove item from cart:", error)
+  const addItem = async (item: Omit<CartItem, 'quantity'>) => {
+    const existingItem = items.find(i => i.product_id === item.product_id)
+    let newItems: CartItem[]
+
+    if (existingItem) {
+      newItems = items.map(i =>
+        i.product_id === item.product_id
+          ? { ...i, quantity: i.quantity + 1 }
+          : i
+      )
+    } else {
+      newItems = [...items, { ...item, quantity: 1 }]
     }
+
+    setItems(newItems)
+    await saveCart(newItems)
   }
 
-  const updateQuantity = async (id: string, quantity: number) => {
+  const removeItem = async (productId: string) => {
+    const newItems = items.filter(item => item.product_id !== productId)
+    setItems(newItems)
+    await saveCart(newItems)
+  }
+
+  const updateQuantity = async (productId: string, quantity: number) => {
     if (quantity <= 0) {
-      await removeItem(id)
+      removeItem(productId)
       return
     }
 
-    try {
-      const updatedItems = items.map(item => 
-        item.id === id ? { ...item, quantity } : item
-      )
-      
-      const cartItems = updatedItems.map(item => ({
-        product_id: item.id,
-        quantity: item.quantity
-      }))
-      
-      const success = await CustomerApiService.updateCart(cartItems)
-      if (success) {
-        await refreshCart()
-      }
-    } catch (error) {
-      console.error("Failed to update cart quantity:", error)
-    }
+    const newItems = items.map(item =>
+      item.product_id === productId
+        ? { ...item, quantity }
+        : item
+    )
+    setItems(newItems)
+    await saveCart(newItems)
   }
 
   const clearCart = async () => {
-    try {
-      const success = await CustomerApiService.clearCart()
-      if (success) {
-        setItems([])
+    setItems([])
+    if (isAuthenticated && user) {
+      try {
+        const token = localStorage.getItem('access_token')
+        await fetch(`${process.env.NEXT_PUBLIC_API_URL}/cart`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        })
+      } catch (error) {
+        console.error('Failed to clear cart:', error)
       }
-    } catch (error) {
-      console.error("Failed to clear cart:", error)
     }
   }
 
-  const itemCount = Array.isArray(items) ? items.reduce((total, item) => total + item.quantity, 0) : 0
-  const totalPrice = Array.isArray(items) ? items.reduce((total, item) => total + item.price * item.quantity, 0) : 0
+  const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  const itemCount = items.reduce((sum, item) => sum + item.quantity, 0)
 
   return (
     <CartContext.Provider
       value={{
         items,
-        itemCount,
-        totalPrice,
         addItem,
         removeItem,
         updateQuantity,
         clearCart,
+        total,
+        itemCount,
         loading,
-        refreshCart,
       }}
     >
       {children}
@@ -194,8 +159,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
 export function useCart() {
   const context = useContext(CartContext)
-  if (!context) {
-    throw new Error("useCart must be used within a CartProvider")
+  if (context === undefined) {
+    throw new Error('useCart must be used within a CartProvider')
   }
   return context
 }

@@ -52,23 +52,31 @@ class ProductApiService {
     }
   }
 
-  static async getAllProducts(): Promise<Product[]> {
-    try {
-      const response = await this.apiRequest('/admin/products?skip=0&limit=1000')
-      return response.products || []
-    } catch (error) {
-      console.error("Failed to get products:", error)
-      return []
-    }
-  }
-
+  // Use public products endpoint for customers
   static async getProductById(id: string): Promise<Product | null> {
     try {
-      const products = await this.getAllProducts()
-      return products.find(p => p.id === id) || null
+      const response = await this.apiRequest(`/products/${id}`)
+      return response || null
     } catch (error) {
       console.error("Failed to get product:", error)
       return null
+    }
+  }
+
+  // Cart API methods
+  static async addToCart(productId: string, quantity: number = 1): Promise<boolean> {
+    try {
+      await this.apiRequest('/cart/add', {
+        method: 'POST',
+        body: JSON.stringify({
+          product_id: productId,
+          quantity: quantity
+        })
+      })
+      return true
+    } catch (error) {
+      console.error("Failed to add to cart:", error)
+      return false
     }
   }
 
@@ -88,7 +96,7 @@ class ProductApiService {
 function ProductDetailContent() {
   const router = useRouter()
   const params = useParams()
-  const { addItem } = useCart()
+  const { addItem: addToCart } = useCart()
   const { addItem: addToWishlist, removeItem: removeFromWishlist, isInWishlist } = useWishlist()
   
   const [product, setProduct] = useState<Product | null>(null)
@@ -104,7 +112,7 @@ function ProductDetailContent() {
 
   const loadCurrentUser = async () => {
     try {
-      const user = AuthService.getStoredUser()
+      const user = await AuthService.getCurrentUser()
       setCurrentUser(user)
     } catch (error) {
       console.error("Failed to load current user:", error)
@@ -115,14 +123,14 @@ function ProductDetailContent() {
     try {
       setLoading(true)
       
-      const productData = await CustomerApiService.getProductById(params.id as string)
+      const productData = await ProductApiService.getProductById(params.id as string)
       
       if (productData) {
         setProduct(productData)
         
         // Update fabrication status to "visited" (1) when user views product
         if (currentUser?.id) {
-          await AuthService.updateFabricationStatus(currentUser.id, 1)
+          await ProductApiService.updateFabricationStatus(currentUser.id, 1)
         }
       } else {
         toast({
@@ -164,22 +172,120 @@ function ProductDetailContent() {
       return
     }
 
-    // Add multiple quantities
-    for (let i = 0; i < quantity; i++) {
-      await addItem({
+    try {
+      // Try to add to backend cart first
+      const success = await ProductApiService.addToCart(product.id, quantity)
+      
+      if (success) {
+        // Also add to local cart state for immediate UI feedback
+        addToCart({
+          id: product.id,
+          name: product.name,
+          sku: product.sku,
+          price: product.price,
+          image: product.image || product.images?.[0] || "",
+          quantity: quantity,
+          inStock: product.inStock,
+        })
+
+        // Update fabrication status to "added to cart" (2)
+        if (currentUser?.id) {
+          await ProductApiService.updateFabricationStatus(currentUser.id, 2)
+        }
+
+        // Also save to user-specific localStorage cart
+        const userData = localStorage.getItem("current_user")
+        if (userData) {
+          try {
+            const user = JSON.parse(userData)
+            const userId = user.id
+            const cartKey = `cart_${userId}`
+            
+            // Get existing cart
+            const existingCart = JSON.parse(localStorage.getItem(cartKey) || "[]")
+            
+            // Check if item already exists
+            const existingItemIndex = existingCart.findIndex((item: any) => item.id === product.id)
+            
+            if (existingItemIndex >= 0) {
+              // Update quantity
+              existingCart[existingItemIndex].quantity += quantity
+            } else {
+              // Add new item
+              existingCart.push({
+                id: product.id,
+                name: product.name,
+                sku: product.sku,
+                price: product.price,
+                image: product.image || product.images?.[0] || "",
+                quantity: quantity,
+                inStock: product.inStock,
+              })
+            }
+            
+            localStorage.setItem(cartKey, JSON.stringify(existingCart))
+          } catch (error) {
+            console.error("Failed to save to localStorage cart:", error)
+          }
+        }
+
+        toast({
+          title: "Added to Cart",
+          description: `${quantity} × ${product.name} added to your cart.`
+        })
+      } else {
+        throw new Error("Backend add to cart failed")
+      }
+    } catch (error) {
+      console.error("Failed to add to cart:", error)
+      
+      // Fallback to local cart only
+      addToCart({
         id: product.id,
         name: product.name,
         sku: product.sku,
         price: product.price,
-        image: product.image,
+        image: product.image || product.images?.[0] || "",
+        quantity: quantity,
         inStock: product.inStock,
       })
-    }
 
-    toast({
-      title: "Added to Cart",
-      description: `${quantity} × ${product.name} added to your cart.`
-    })
+      // Also save to localStorage as fallback
+      const userData = localStorage.getItem("current_user")
+      if (userData) {
+        try {
+          const user = JSON.parse(userData)
+          const userId = user.id
+          const cartKey = `cart_${userId}`
+          
+          const existingCart = JSON.parse(localStorage.getItem(cartKey) || "[]")
+          const existingItemIndex = existingCart.findIndex((item: any) => item.id === product.id)
+          
+          if (existingItemIndex >= 0) {
+            existingCart[existingItemIndex].quantity += quantity
+          } else {
+            existingCart.push({
+              id: product.id,
+              name: product.name,
+              sku: product.sku,
+              price: product.price,
+              image: product.image || product.images?.[0] || "",
+              quantity: quantity,
+              inStock: product.inStock,
+            })
+          }
+          
+          localStorage.setItem(cartKey, JSON.stringify(existingCart))
+        } catch (error) {
+          console.error("Failed to save to localStorage cart:", error)
+        }
+      }
+
+      toast({
+        title: "Added to Cart",
+        description: `${quantity} × ${product.name} added to your cart.`
+      })
+    }
   }
 
   const handleWishlistToggle = () => {
@@ -193,16 +299,16 @@ function ProductDetailContent() {
       })
     } else {
       addToWishlist({
-      id: product.id,
-      name: product.name,
-      sku: product.sku,
-      price: product.price,
-      image: product.image,
-      inStock: product.inStock,
-    })
-
-    toast({
-        description: `${product.name} removed from your wishlist.`
+        id: product.id,
+        name: product.name,
+        sku: product.sku,
+        price: product.price,
+        image: product.image || product.images?.[0] || "",
+        inStock: product.inStock,
+        rating: product.rating || 0,
+        reviews: product.reviews || 0,
+      })
+      toast({
         title: "Added to Wishlist",
         description: `${product.name} added to your wishlist.`
       })

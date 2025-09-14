@@ -101,7 +101,9 @@ export class AdminApiService {
 
   static async getUsersByFabricationStatus(status: 0 | 1 | 2): Promise<User[]> {
     try {
-      const response = await this.apiRequest(`/admin/users/fabrication-status/${status}`)
+      const response = await this.apiRequest(`/admin/users/fabrication-status/${status}`, {
+        method: 'GET' // Explicitly specify GET method
+      })
       return response.users || []
     } catch (error) {
       console.error("Failed to get users by fabrication status:", error)

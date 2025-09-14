@@ -22,10 +22,110 @@ import {
 } from "@/components/ui/alert-dialog"
 import { AdminLayout } from "@/components/admin/admin-layout"
 import { AdminGuard } from "@/components/admin/admin-guard"
-import { AdminApiService } from "@/lib/admin-api"
 import type { Product, ProductFormData } from "@/lib/types"
 import { Package, Search, Plus, Edit, Trash2, Filter, Star, AlertTriangle } from "lucide-react"
 import { toast } from "@/components/ui/use-toast"
+
+// Enhanced Admin Product API Service
+class AdminProductApiService {
+  private static readonly API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
+  private static async apiRequest(endpoint: string, options: RequestInit = {}): Promise<any> {
+    const token = localStorage.getItem("access_token")
+    const url = `${this.API_BASE_URL}${endpoint}`
+    
+    const defaultHeaders = {
+      'Content-Type': 'application/json',
+    }
+
+    if (token) {
+      defaultHeaders['Authorization'] = `Bearer ${token}`
+    }
+
+    const config = {
+      ...options,
+      headers: {
+        ...defaultHeaders,
+        ...options.headers,
+      },
+    }
+
+    try {
+      const response = await fetch(url, config)
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      return await response.json()
+    } catch (error) {
+      console.error(`API request failed for ${endpoint}:`, error)
+      throw error
+    }
+  }
+
+  static async getAllProducts(params: {
+    skip?: number,
+    limit?: number,
+    category?: string
+  } = {}): Promise<{products: Product[], total: number}> {
+    try {
+      const queryParams = new URLSearchParams()
+      if (params.skip) queryParams.append('skip', params.skip.toString())
+      if (params.limit) queryParams.append('limit', params.limit.toString())
+      if (params.category) queryParams.append('category', params.category)
+      
+      const endpoint = `/admin/products?${queryParams.toString()}`
+      const response = await this.apiRequest(endpoint)
+      
+      return {
+        products: response.products || [],
+        total: response.total || 0
+      }
+    } catch (error) {
+      console.error("Failed to get products:", error)
+      return { products: [], total: 0 }
+    }
+  }
+
+  static async createProduct(productData: ProductFormData): Promise<Product | null> {
+    try {
+      const response = await this.apiRequest('/admin/products', {
+        method: 'POST',
+        body: JSON.stringify(productData)
+      })
+      return response
+    } catch (error) {
+      console.error("Failed to create product:", error)
+      return null
+    }
+  }
+
+  static async updateProduct(productId: string, productData: Partial<ProductFormData>): Promise<boolean> {
+    try {
+      await this.apiRequest(`/admin/products/${productId}`, {
+        method: 'PUT',
+        body: JSON.stringify(productData)
+      })
+      return true
+    } catch (error) {
+      console.error("Failed to update product:", error)
+      return false
+    }
+  }
+
+  static async deleteProduct(productId: string): Promise<boolean> {
+    try {
+      await this.apiRequest(`/admin/products/${productId}`, {
+        method: 'DELETE'
+      })
+      return true
+    } catch (error) {
+      console.error("Failed to delete product:", error)
+      return false
+    }
+  }
+}
 
 function ProductManagementContent() {
   const [products, setProducts] = useState<Product[]>([])
@@ -66,7 +166,7 @@ function ProductManagementContent() {
   const loadProducts = async () => {
     try {
       setLoading(true)
-      const { products: allProducts, total } = await AdminApiService.getAllProducts(0, 1000)
+      const { products: allProducts, total } = await AdminProductApiService.getAllProducts({ skip: 0, limit: 1000 })
       setProducts(allProducts)
       setTotalProducts(total)
     } catch (error) {
@@ -211,34 +311,35 @@ function ProductManagementContent() {
 
   const handleSaveProduct = async () => {
     try {
+      let success = false
+
       if (editingProduct) {
         // Update existing product
-        const success = await AdminApiService.updateProduct(editingProduct.id, productForm)
+        success = await AdminProductApiService.updateProduct(editingProduct.id, productForm)
         if (success) {
           toast({
             title: "Success",
             description: "Product updated successfully!"
           })
-          await loadProducts()
-          setIsAddDialogOpen(false)
-          resetForm()
-        } else {
-          throw new Error("Update failed")
         }
       } else {
         // Add new product
-        const newProduct = await AdminApiService.createProduct(productForm)
-        if (newProduct) {
+        const newProduct = await AdminProductApiService.createProduct(productForm)
+        success = !!newProduct
+        if (success) {
           toast({
-            title: "Success",
+            title: "Success", 
             description: "Product added successfully!"
           })
-          await loadProducts()
-          setIsAddDialogOpen(false)
-          resetForm()
-        } else {
-          throw new Error("Create failed")
         }
+      }
+
+      if (success) {
+        await loadProducts()
+        setIsAddDialogOpen(false)
+        resetForm()
+      } else {
+        throw new Error("Operation failed")
       }
     } catch (error) {
       console.error("Error saving product:", error)
@@ -252,7 +353,7 @@ function ProductManagementContent() {
 
   const handleDeleteProduct = async (productId: string) => {
     try {
-      const success = await AdminApiService.deleteProduct(productId)
+      const success = await AdminProductApiService.deleteProduct(productId)
       if (success) {
         toast({
           title: "Success",
@@ -313,6 +414,23 @@ function ProductManagementContent() {
     setProductForm({
       ...productForm,
       features: productForm.features.filter((_, i) => i !== index),
+    })
+  }
+
+  const addApplication = () => {
+    const application = prompt("Enter application:")
+    if (application) {
+      setProductForm({
+        ...productForm,
+        applications: [...productForm.applications, application],
+      })
+    }
+  }
+
+  const removeApplication = (index: number) => {
+    setProductForm({
+      ...productForm,
+      applications: productForm.applications.filter((_, i) => i !== index),
     })
   }
 
@@ -546,11 +664,11 @@ function ProductManagementContent() {
 
       {/* Add/Edit Product Dialog */}
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingProduct ? "Edit Product" : "Add New Product"}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-6">
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="name">Product Name *</Label>
@@ -639,6 +757,44 @@ function ProductManagementContent() {
               />
             </div>
 
+            {/* Product Images */}
+            <div>
+              <Label>Product Images</Label>
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                  className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                  disabled={uploading}
+                />
+                {uploading && <p className="text-sm text-gray-500 mt-2">Uploading images...</p>}
+              </div>
+              
+              {/* Display uploaded images */}
+              {uploadedImages.length > 0 && (
+                <div className="grid grid-cols-4 gap-4 mt-4">
+                  {uploadedImages.map((url, index) => (
+                    <div key={index} className="relative">
+                      <img
+                        src={url}
+                        alt={`Upload ${index + 1}`}
+                        className="w-full h-24 object-cover rounded-lg border"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeImage(index)}
+                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {/* Specifications */}
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -694,46 +850,35 @@ function ProductManagementContent() {
               </div>
             </div>
 
-            {/* Product Images */}
+            {/* Applications */}
             <div>
-              <Label>Product Images</Label>
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
-                <input
-                  type="file"
-                  multiple
-                  accept="image/*"
-                  onChange={handleImageUpload}
-                  className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                  disabled={uploading}
-                />
-                {uploading && <p className="text-sm text-gray-500 mt-2">Uploading images...</p>}
+              <div className="flex items-center justify-between mb-2">
+                <Label>Applications</Label>
+                <Button type="button" size="sm" variant="outline" onClick={addApplication}>
+                  <Plus className="h-3 w-3 mr-1" />
+                  Add Application
+                </Button>
               </div>
-              
-              {/* Display uploaded images */}
-              {uploadedImages.length > 0 && (
-                <div className="grid grid-cols-4 gap-4 mt-4">
-                  {uploadedImages.map((url, index) => (
-                    <div key={index} className="relative">
-                      <img
-                        src={url}
-                        alt={`Upload ${index + 1}`}
-                        className="w-full h-24 object-cover rounded-lg border"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeImage(index)}
-                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <div className="space-y-2">
+                {productForm.applications.map((application, index) => (
+                  <div key={index} className="flex items-center gap-2 p-2 bg-slate-50 rounded">
+                    <span className="text-sm">{application}</span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => removeApplication(index)}
+                      className="ml-auto"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </div>
 
-            <div className="flex gap-2 pt-4">
-              <Button onClick={handleSaveProduct} className="flex-1">
+            <div className="flex gap-2 pt-4 border-t">
+              <Button onClick={handleSaveProduct} className="flex-1" disabled={!productForm.name || !productForm.sku}>
                 {editingProduct ? "Update Product" : "Add Product"}
               </Button>
               <Button variant="outline" onClick={() => setIsAddDialogOpen(false)} className="flex-1">

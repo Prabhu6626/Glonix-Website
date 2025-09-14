@@ -5,33 +5,160 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Textarea } from "@/components/ui/textarea"
 import { AdminLayout } from "@/components/admin/admin-layout"
 import { AdminGuard } from "@/components/admin/admin-guard"
-import { AdminApiService } from "@/lib/admin-api"
-import type { Order } from "@/lib/types"
-import { ShoppingCart, Search, Filter, Eye, Edit, Package, Truck, CheckCircle, XCircle, Clock, DollarSign } from "lucide-react"
+import { Package, Search, Filter, Eye, Edit, Truck, CheckCircle, Clock, AlertCircle, DollarSign } from "lucide-react"
 import { toast } from "@/components/ui/use-toast"
 
-function OrderManagementContent() {
+interface OrderItem {
+  product_id: string
+  product_name: string
+  product_sku: string
+  price: number
+  quantity: number
+  total: number
+}
+
+interface Order {
+  id: string
+  order_number: string
+  user_id: string
+  user_name: string
+  user_email: string
+  items: OrderItem[]
+  status: "pending" | "confirmed" | "processing" | "shipped" | "delivered" | "cancelled"
+  payment_status: "pending" | "paid" | "failed" | "refunded"
+  total: number
+  subtotal?: number
+  shipping_cost?: number
+  tax?: number
+  created_at: string
+  updated_at?: string
+  tracking_number?: string
+  shipping_address?: any
+  billing_address?: any
+  notes?: string
+}
+
+// Admin Orders API Service
+class AdminOrdersApiService {
+  private static readonly API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
+  private static async apiRequest(endpoint: string, options: RequestInit = {}): Promise<any> {
+    const token = localStorage.getItem("access_token")
+    const url = `${this.API_BASE_URL}${endpoint}`
+    
+    const defaultHeaders = {
+      'Content-Type': 'application/json',
+    }
+
+    if (token) {
+      defaultHeaders['Authorization'] = `Bearer ${token}`
+    }
+
+    const config = {
+      ...options,
+      headers: {
+        ...defaultHeaders,
+        ...options.headers,
+      },
+    }
+
+    try {
+      const response = await fetch(url, config)
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      return await response.json()
+    } catch (error) {
+      console.error(`API request failed for ${endpoint}:`, error)
+      throw error
+    }
+  }
+
+  static async getAllOrders(params: {
+    skip?: number,
+    limit?: number,
+    status?: string
+  } = {}): Promise<{orders: Order[], total: number}> {
+    try {
+      const queryParams = new URLSearchParams()
+      if (params.skip) queryParams.append('skip', params.skip.toString())
+      if (params.limit) queryParams.append('limit', params.limit.toString())
+      if (params.status) queryParams.append('status', params.status)
+      
+      const endpoint = `/admin/orders?${queryParams.toString()}`
+      const response = await this.apiRequest(endpoint)
+      
+      return {
+        orders: response.orders || [],
+        total: response.total || 0
+      }
+    } catch (error) {
+      console.error("Failed to get orders:", error)
+      return { orders: [], total: 0 }
+    }
+  }
+
+  static async updateOrder(orderId: string, updateData: {
+    status?: string,
+    tracking_number?: string,
+    notes?: string
+  }): Promise<boolean> {
+    try {
+      await this.apiRequest(`/admin/orders/${orderId}`, {
+        method: 'PUT',
+        body: JSON.stringify(updateData)
+      })
+      return true
+    } catch (error) {
+      console.error("Failed to update order:", error)
+      return false
+    }
+  }
+
+  static async getOrderById(orderId: string): Promise<Order | null> {
+    try {
+      const response = await this.apiRequest(`/orders/${orderId}`)
+      return response.order || null
+    } catch (error) {
+      console.error("Failed to get order:", error)
+      return null
+    }
+  }
+}
+
+function OrdersManagementContent() {
   const [orders, setOrders] = useState<Order[]>([])
   const [filteredOrders, setFilteredOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [totalOrders, setTotalOrders] = useState(0)
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
-  const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
+  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
-  const [orderForm, setOrderForm] = useState({
-    status: "pending" as Order["status"],
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [orderUpdate, setOrderUpdate] = useState({
+    status: "",
     tracking_number: "",
-    notes: "",
+    notes: ""
   })
 
-  const orderStatuses = ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"]
+  const statusOptions = [
+    { value: "pending", label: "Pending", color: "bg-yellow-100 text-yellow-800" },
+    { value: "confirmed", label: "Confirmed", color: "bg-blue-100 text-blue-800" },
+    { value: "processing", label: "Processing", color: "bg-purple-100 text-purple-800" },
+    { value: "shipped", label: "Shipped", color: "bg-cyan-100 text-cyan-800" },
+    { value: "delivered", label: "Delivered", color: "bg-green-100 text-green-800" },
+    { value: "cancelled", label: "Cancelled", color: "bg-red-100 text-red-800" }
+  ]
 
   useEffect(() => {
     loadOrders()
@@ -44,8 +171,8 @@ function OrderManagementContent() {
   const loadOrders = async () => {
     try {
       setLoading(true)
-      const { orders: allOrders, total } = await AdminApiService.getAllOrders(0, 1000)
-      setOrders(allOrders)
+      const { orders: ordersData, total } = await AdminOrdersApiService.getAllOrders({ skip: 0, limit: 1000 })
+      setOrders(ordersData)
       setTotalOrders(total)
     } catch (error) {
       console.error("Failed to load orders:", error)
@@ -68,7 +195,8 @@ function OrderManagementContent() {
         (order) =>
           order.order_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
           order.user_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          order.user_email.toLowerCase().includes(searchQuery.toLowerCase()),
+          order.user_email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          order.id.toLowerCase().includes(searchQuery.toLowerCase())
       )
     }
 
@@ -80,26 +208,38 @@ function OrderManagementContent() {
     setFilteredOrders(filtered)
   }
 
+  const handleViewOrder = async (orderId: string) => {
+    try {
+      const order = await AdminOrdersApiService.getOrderById(orderId)
+      if (order) {
+        setSelectedOrder(order as Order)
+        setIsViewDialogOpen(true)
+      }
+    } catch (error) {
+      console.error("Failed to load order details:", error)
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to load order details"
+      })
+    }
+  }
+
   const handleEditOrder = (order: Order) => {
     setEditingOrder(order)
-    setOrderForm({
+    setOrderUpdate({
       status: order.status,
       tracking_number: order.tracking_number || "",
-      notes: order.notes || "",
+      notes: order.notes || ""
     })
     setIsEditDialogOpen(true)
   }
 
-  const handleSaveOrder = async () => {
+  const handleUpdateOrder = async () => {
     if (!editingOrder) return
 
     try {
-      const success = await AdminApiService.updateOrderStatus(editingOrder.id, {
-        status: orderForm.status,
-        tracking_number: orderForm.tracking_number,
-        notes: orderForm.notes,
-      })
-
+      const success = await AdminOrdersApiService.updateOrder(editingOrder.id, orderUpdate)
       if (success) {
         toast({
           title: "Success",
@@ -121,26 +261,7 @@ function OrderManagementContent() {
     }
   }
 
-  const getStatusColor = (status: Order["status"]) => {
-    switch (status) {
-      case "pending":
-        return "bg-yellow-100 text-yellow-800 border-yellow-200"
-      case "confirmed":
-        return "bg-blue-100 text-blue-800 border-blue-200"
-      case "processing":
-        return "bg-purple-100 text-purple-800 border-purple-200"
-      case "shipped":
-        return "bg-cyan-100 text-cyan-800 border-cyan-200"
-      case "delivered":
-        return "bg-green-100 text-green-800 border-green-200"
-      case "cancelled":
-        return "bg-red-100 text-red-800 border-red-200"
-      default:
-        return "bg-gray-100 text-gray-800 border-gray-200"
-    }
-  }
-
-  const getStatusIcon = (status: Order["status"]) => {
+  const getStatusIcon = (status: string) => {
     switch (status) {
       case "pending":
         return <Clock className="h-4 w-4" />
@@ -153,10 +274,25 @@ function OrderManagementContent() {
       case "delivered":
         return <CheckCircle className="h-4 w-4" />
       case "cancelled":
-        return <XCircle className="h-4 w-4" />
+        return <AlertCircle className="h-4 w-4" />
       default:
-        return <Clock className="h-4 w-4" />
+        return <Package className="h-4 w-4" />
     }
+  }
+
+  const getStatusColor = (status: string) => {
+    const statusOption = statusOptions.find(opt => opt.value === status)
+    return statusOption ? statusOption.color : "bg-gray-100 text-gray-800"
+  }
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
   }
 
   if (loading) {
@@ -173,9 +309,8 @@ function OrderManagementContent() {
   const pendingOrders = orders.filter(o => o.status === "pending").length
   const processingOrders = orders.filter(o => ["confirmed", "processing"].includes(o.status)).length
   const shippedOrders = orders.filter(o => o.status === "shipped").length
-  const totalRevenue = orders
-    .filter(o => ["delivered", "completed"].includes(o.status))
-    .reduce((sum, o) => sum + o.total, 0)
+  const deliveredOrders = orders.filter(o => o.status === "delivered").length
+  const totalRevenue = orders.filter(o => ["delivered", "shipped"].includes(o.status)).reduce((sum, order) => sum + order.total, 0)
 
   return (
     <div className="space-y-8">
@@ -183,15 +318,15 @@ function OrderManagementContent() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
-            <ShoppingCart className="h-8 w-8 text-cyan-600" />
-            Order Management
+            <Package className="h-8 w-8 text-cyan-600" />
+            Orders Management
           </h1>
-          <p className="text-slate-600 mt-2">Track and manage customer orders</p>
+          <p className="text-slate-600 mt-2">View and manage customer orders</p>
         </div>
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
         <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-blue-700">Total Orders</CardTitle>
@@ -203,7 +338,7 @@ function OrderManagementContent() {
 
         <Card className="bg-gradient-to-br from-yellow-50 to-yellow-100 border-yellow-200">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-yellow-700">Pending Orders</CardTitle>
+            <CardTitle className="text-sm font-medium text-yellow-700">Pending</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-yellow-900">{pendingOrders}</div>
@@ -221,10 +356,19 @@ function OrderManagementContent() {
 
         <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-green-700">Total Revenue</CardTitle>
+            <CardTitle className="text-sm font-medium text-green-700">Delivered</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-900">${totalRevenue.toFixed(2)}</div>
+            <div className="text-2xl font-bold text-green-900">{deliveredOrders}</div>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-gradient-to-br from-emerald-50 to-emerald-100 border-emerald-200">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-emerald-700">Revenue</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-emerald-900">${totalRevenue.toFixed(0)}</div>
           </CardContent>
         </Card>
       </div>
@@ -254,10 +398,10 @@ function OrderManagementContent() {
                 <SelectValue placeholder="Filter by status" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                {orderStatuses.map((status) => (
-                  <SelectItem key={status} value={status}>
-                    {status.charAt(0).toUpperCase() + status.slice(1)}
+                <SelectItem value="all">All Statuses</SelectItem>
+                {statusOptions.map((status) => (
+                  <SelectItem key={status.value} value={status.value}>
+                    {status.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -274,7 +418,7 @@ function OrderManagementContent() {
         <CardContent>
           {filteredOrders.length === 0 ? (
             <div className="text-center py-12">
-              <ShoppingCart className="h-16 w-16 text-slate-400 mx-auto mb-4" />
+              <Package className="h-16 w-16 text-slate-400 mx-auto mb-4" />
               <h3 className="text-xl font-semibold text-slate-900 mb-2">No orders found</h3>
               <p className="text-slate-600">Try adjusting your search or filter criteria</p>
             </div>
@@ -286,9 +430,10 @@ function OrderManagementContent() {
                     <th className="text-left py-3 px-4 font-medium text-slate-700">Order</th>
                     <th className="text-left py-3 px-4 font-medium text-slate-700">Customer</th>
                     <th className="text-left py-3 px-4 font-medium text-slate-700">Date</th>
+                    <th className="text-left py-3 px-4 font-medium text-slate-700">Items</th>
                     <th className="text-left py-3 px-4 font-medium text-slate-700">Total</th>
-                    <th className="text-left py-3 px-4 font-medium text-slate-700">Payment</th>
                     <th className="text-left py-3 px-4 font-medium text-slate-700">Status</th>
+                    <th className="text-left py-3 px-4 font-medium text-slate-700">Payment</th>
                     <th className="text-left py-3 px-4 font-medium text-slate-700">Actions</th>
                   </tr>
                 </thead>
@@ -297,10 +442,8 @@ function OrderManagementContent() {
                     <tr key={order.id} className="border-b hover:bg-slate-50">
                       <td className="py-4 px-4">
                         <div>
-                          <div className="font-medium text-slate-900">#{order.order_number}</div>
-                          {order.tracking_number && (
-                            <div className="text-sm text-slate-600">Track: {order.tracking_number}</div>
-                          )}
+                          <div className="font-medium text-slate-900">{order.order_number}</div>
+                          <div className="text-sm text-slate-600">#{order.id.substring(0, 8)}</div>
                         </div>
                       </td>
                       <td className="py-4 px-4">
@@ -310,121 +453,46 @@ function OrderManagementContent() {
                         </div>
                       </td>
                       <td className="py-4 px-4">
-                        <div className="text-sm text-slate-600">
-                          {new Date(order.created_at).toLocaleDateString()}
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {new Date(order.created_at).toLocaleTimeString()}
-                        </div>
+                        <div className="text-sm">{formatDate(order.created_at)}</div>
                       </td>
                       <td className="py-4 px-4">
-                        <div className="font-medium text-slate-900">${order.total.toFixed(2)}</div>
+                        <div className="text-sm">{order.items?.length || 0} items</div>
                       </td>
                       <td className="py-4 px-4">
-                        <Badge 
-                          className={
-                            order.payment_status === "completed" 
-                              ? "bg-green-100 text-green-800"
-                              : order.payment_status === "pending"
-                              ? "bg-yellow-100 text-yellow-800" 
-                              : "bg-red-100 text-red-800"
-                          }
-                        >
-                          {order.payment_status}
-                        </Badge>
+                        <div className="font-medium">${order.total.toFixed(2)}</div>
                       </td>
                       <td className="py-4 px-4">
-                        <Badge className={getStatusColor(order.status)}>
+                        <Badge className={`${getStatusColor(order.status)}`}>
                           <div className="flex items-center gap-1">
                             {getStatusIcon(order.status)}
-                            {order.status}
+                            {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
                           </div>
                         </Badge>
                       </td>
                       <td className="py-4 px-4">
+                        <Badge className={
+                          order.payment_status === "paid" ? "bg-green-100 text-green-800" :
+                          order.payment_status === "pending" ? "bg-yellow-100 text-yellow-800" :
+                          "bg-red-100 text-red-800"
+                        }>
+                          {order.payment_status.charAt(0).toUpperCase() + order.payment_status.slice(1)}
+                        </Badge>
+                      </td>
+                      <td className="py-4 px-4">
                         <div className="flex items-center gap-2">
-                          <Dialog>
-                            <DialogTrigger asChild>
-                              <Button size="sm" variant="outline">
-                                <Eye className="h-3 w-3 mr-1" />
-                                View
-                              </Button>
-                            </DialogTrigger>
-                            <DialogContent className="max-w-2xl">
-                              <DialogHeader>
-                                <DialogTitle>Order Details - #{order.order_number}</DialogTitle>
-                              </DialogHeader>
-                              <div className="space-y-4 max-h-96 overflow-y-auto">
-                                <div className="grid grid-cols-2 gap-4">
-                                  <div>
-                                    <h4 className="font-medium text-slate-900 mb-2">Customer Information</h4>
-                                    <div className="text-sm text-slate-600 space-y-1">
-                                      <div>{order.user_name}</div>
-                                      <div>{order.user_email}</div>
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <h4 className="font-medium text-slate-900 mb-2">Order Information</h4>
-                                    <div className="text-sm text-slate-600 space-y-1">
-                                      <div>Order: #{order.order_number}</div>
-                                      <div>Date: {new Date(order.created_at).toLocaleDateString()}</div>
-                                      <div>Status: {order.status}</div>
-                                      <div>Payment: {order.payment_status}</div>
-                                    </div>
-                                  </div>
-                                </div>
-
-                                {order.items && order.items.length > 0 && (
-                                  <div>
-                                    <h4 className="font-medium text-slate-900 mb-2">Order Items</h4>
-                                    <div className="border rounded-lg overflow-hidden">
-                                      <table className="w-full text-sm">
-                                        <thead className="bg-slate-50">
-                                          <tr>
-                                            <th className="text-left p-2">Product</th>
-                                            <th className="text-left p-2">Quantity</th>
-                                            <th className="text-left p-2">Price</th>
-                                            <th className="text-left p-2">Total</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {order.items.map((item, index) => (
-                                            <tr key={index} className="border-t">
-                                              <td className="p-2">
-                                                <div>{item.product_name}</div>
-                                                <div className="text-slate-500">{item.product_sku}</div>
-                                              </td>
-                                              <td className="p-2">{item.quantity}</td>
-                                              <td className="p-2">${item.price.toFixed(2)}</td>
-                                              <td className="p-2">${item.total.toFixed(2)}</td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  </div>
-                                )}
-
-                                <div className="bg-slate-50 p-4 rounded-lg">
-                                  <div className="flex justify-between items-center font-medium">
-                                    <span>Total Amount:</span>
-                                    <span className="text-lg">${order.total.toFixed(2)}</span>
-                                  </div>
-                                </div>
-
-                                {order.notes && (
-                                  <div>
-                                    <h4 className="font-medium text-slate-900 mb-2">Notes</h4>
-                                    <div className="text-sm text-slate-600 bg-slate-50 p-3 rounded">
-                                      {order.notes}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            </DialogContent>
-                          </Dialog>
-
-                          <Button size="sm" variant="outline" onClick={() => handleEditOrder(order)}>
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            onClick={() => handleViewOrder(order.id)}
+                          >
+                            <Eye className="h-3 w-3 mr-1" />
+                            View
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            onClick={() => handleEditOrder(order)}
+                          >
                             <Edit className="h-3 w-3 mr-1" />
                             Edit
                           </Button>
@@ -439,31 +507,118 @@ function OrderManagementContent() {
         </CardContent>
       </Card>
 
+      {/* View Order Dialog */}
+      <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Order Details - {selectedOrder?.order_number}</DialogTitle>
+          </DialogHeader>
+          {selectedOrder && (
+            <div className="space-y-6">
+              {/* Order Info */}
+              <div className="grid grid-cols-2 gap-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-sm">Order Information</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-sm">
+                    <div><span className="font-medium">Order ID:</span> {selectedOrder.id}</div>
+                    <div><span className="font-medium">Order Number:</span> {selectedOrder.order_number}</div>
+                    <div><span className="font-medium">Date:</span> {formatDate(selectedOrder.created_at)}</div>
+                    <div><span className="font-medium">Status:</span> 
+                      <Badge className={`ml-2 ${getStatusColor(selectedOrder.status)}`}>
+                        {selectedOrder.status}
+                      </Badge>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-sm">Customer Information</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-sm">
+                    <div><span className="font-medium">Name:</span> {selectedOrder.user_name}</div>
+                    <div><span className="font-medium">Email:</span> {selectedOrder.user_email}</div>
+                    <div><span className="font-medium">Customer ID:</span> {selectedOrder.user_id}</div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Order Items */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm">Order Items</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {selectedOrder.items?.map((item, index) => (
+                      <div key={index} className="flex justify-between items-center p-3 bg-slate-50 rounded">
+                        <div>
+                          <div className="font-medium">{item.product_name}</div>
+                          <div className="text-sm text-slate-600">SKU: {item.product_sku}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-medium">${item.total.toFixed(2)}</div>
+                          <div className="text-sm text-slate-600">{item.quantity} × ${item.price.toFixed(2)}</div>
+                        </div>
+                      </div>
+                    )) || <p>No items found</p>}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Order Summary */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm">Order Summary</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <span>Subtotal:</span>
+                      <span>${selectedOrder.subtotal?.toFixed(2) || "0.00"}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Shipping:</span>
+                      <span>${selectedOrder.shipping_cost?.toFixed(2) || "0.00"}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Tax:</span>
+                      <span>${selectedOrder.tax?.toFixed(2) || "0.00"}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-lg border-t pt-2">
+                      <span>Total:</span>
+                      <span>${selectedOrder.total.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Edit Order Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>
-              Edit Order {editingOrder ? `#${editingOrder.order_number}` : ''}
-            </DialogTitle>
+            <DialogTitle>Edit Order - {editingOrder?.order_number}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label htmlFor="status">Order Status</Label>
+              <Label htmlFor="status">Status</Label>
               <Select
-                value={orderForm.status}
-                onValueChange={(value: Order["status"]) => setOrderForm({ ...orderForm, status: value })}
+                value={orderUpdate.status}
+                onValueChange={(value) => setOrderUpdate({...orderUpdate, status: value})}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="Select status" />
                 </SelectTrigger>
                 <SelectContent>
-                  {orderStatuses.map((status) => (
-                    <SelectItem key={status} value={status}>
-                      <div className="flex items-center gap-2">
-                        {getStatusIcon(status as Order["status"])}
-                        {status.charAt(0).toUpperCase() + status.slice(1)}
-                      </div>
+                  {statusOptions.map((status) => (
+                    <SelectItem key={status.value} value={status.value}>
+                      {status.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -474,25 +629,25 @@ function OrderManagementContent() {
               <Label htmlFor="tracking_number">Tracking Number</Label>
               <Input
                 id="tracking_number"
-                value={orderForm.tracking_number}
-                onChange={(e) => setOrderForm({ ...orderForm, tracking_number: e.target.value })}
+                value={orderUpdate.tracking_number}
+                onChange={(e) => setOrderUpdate({...orderUpdate, tracking_number: e.target.value})}
                 placeholder="Enter tracking number"
               />
             </div>
 
             <div>
-              <Label htmlFor="notes">Order Notes</Label>
+              <Label htmlFor="notes">Notes</Label>
               <Textarea
                 id="notes"
-                value={orderForm.notes}
-                onChange={(e) => setOrderForm({ ...orderForm, notes: e.target.value })}
-                placeholder="Add order notes or updates..."
+                value={orderUpdate.notes}
+                onChange={(e) => setOrderUpdate({...orderUpdate, notes: e.target.value})}
+                placeholder="Add order notes..."
                 rows={3}
               />
             </div>
 
             <div className="flex gap-2 pt-4">
-              <Button onClick={handleSaveOrder} className="flex-1">
+              <Button onClick={handleUpdateOrder} className="flex-1">
                 Update Order
               </Button>
               <Button variant="outline" onClick={() => setIsEditDialogOpen(false)} className="flex-1">
@@ -506,11 +661,11 @@ function OrderManagementContent() {
   )
 }
 
-export default function OrderManagementPage() {
+export default function OrdersManagementPage() {
   return (
     <AdminGuard>
       <AdminLayout>
-        <OrderManagementContent />
+        <OrdersManagementContent />
       </AdminLayout>
     </AdminGuard>
   )

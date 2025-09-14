@@ -62,17 +62,39 @@ function DashboardContent() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const loadStats = async () => {
+    // Load user statistics from localStorage
+    const loadStats = () => {
       try {
-        // Load orders from API
-        const orders = await CustomerApiService.getMyOrders()
-        
-        // Load cart from API
-        const cartData = await CustomerApiService.getCart()
-        const cartItems = cartData.length
-        
-        // Load wishlist from localStorage (keeping this for now)
         const wishlist = JSON.parse(localStorage.getItem("wishlist") || "[]")
+
+        // Load user-specific orders and cart
+        const userData = localStorage.getItem("current_user")
+        let cartItems = 0
+        let orders: any[] = []
+        
+        if (userData) {
+          try {
+            const user = JSON.parse(userData)
+            const userId = user.id
+            const cartKey = `cart_${userId}`
+            const ordersKey = `orders_${userId}`
+            
+            // Load user-specific cart
+            const storedCart = localStorage.getItem(cartKey)
+            if (storedCart) {
+              const parsedCart = JSON.parse(storedCart)
+              cartItems = Array.isArray(parsedCart) ? parsedCart.length : 1
+            }
+            
+            // Load user-specific orders
+            const storedOrders = localStorage.getItem(ordersKey)
+            if (storedOrders) {
+              orders = JSON.parse(storedOrders)
+            }
+          } catch (error) {
+            console.error("Failed to load user data:", error)
+          }
+        }
 
         const totalOrders = orders.length
         const pendingOrders = orders.filter((o: any) =>
@@ -85,7 +107,7 @@ function DashboardContent() {
           status: order.status,
           total: order.total,
           createdAt: order.created_at,
-          items: order.items?.length || 0
+          items: order.items.length
         }))
 
         setStats({

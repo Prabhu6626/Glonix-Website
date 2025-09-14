@@ -156,8 +156,6 @@ export interface AdminStats {
   lowStockProducts: number
   newMessages: number
   newQuotes: number
-  visitedUsers?: number
-  cartUsers?: number
 }
 
 // Form interfaces for admin operations

@@ -7,16 +7,17 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { AdminLayout } from "@/components/admin/admin-layout"
 import { AdminGuard } from "@/components/admin/admin-guard"
-import { AdminApiService } from "@/lib/admin-api"
+import { getUsersByFabricationStatus, updateUser } from "@/lib/admin-utils"
 import type { User } from "@/lib/types"
-import { Eye, Search, Mail, Phone, Building, Calendar, ArrowRight } from "lucide-react"
+import { ShoppingBag, Search, Mail, Phone, Building, Calendar, ArrowLeft, DollarSign, RefreshCw, AlertCircle } from "lucide-react"
 import { toast } from "@/components/ui/use-toast"
 
-function VisitedCustomersContent() {
+function CartCustomersContent() {
   const [customers, setCustomers] = useState<User[]>([])
   const [filteredCustomers, setFilteredCustomers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     loadCustomers()
@@ -29,15 +30,18 @@ function VisitedCustomersContent() {
   const loadCustomers = async () => {
     try {
       setLoading(true)
-      // Get users with fabrication_status = 1 (visited/checked price)
-      const visitedUsers = await AdminApiService.getUsersByFabricationStatus(1)
-      setCustomers(visitedUsers)
+      setError(null)
+      // Get users with fabrication_status = 2 (added to cart)
+      const cartUsers = await getUsersByFabricationStatus(2)
+      setCustomers(cartUsers)
     } catch (error) {
-      console.error("Failed to load visited customers:", error)
+      console.error("Failed to load cart customers:", error)
+      const errorMessage = error instanceof Error ? error.message : "Failed to load cart customers"
+      setError(errorMessage)
       toast({
         variant: "destructive",
         title: "Error",
-        description: "Failed to load visited customers"
+        description: errorMessage
       })
     } finally {
       setLoading(false)
@@ -58,13 +62,13 @@ function VisitedCustomersContent() {
     setFilteredCustomers(filtered)
   }
 
-  const moveToCartCustomers = async (customerId: string) => {
+  const moveToVisitedCustomers = async (customerId: string) => {
     try {
-      const success = await AdminApiService.updateUser(customerId, { fabrication_status: 2 })
+      const success = await updateUser(customerId, { fabrication_status: 1 })
       if (success) {
         toast({
           title: "Success",
-          description: "Customer moved to cart customers"
+          description: "Customer moved back to visited customers"
         })
         loadCustomers() // Reload the list
       } else {
@@ -72,10 +76,34 @@ function VisitedCustomersContent() {
       }
     } catch (error) {
       console.error("Failed to update customer status:", error)
+      const errorMessage = error instanceof Error ? error.message : "Failed to update customer status"
       toast({
         variant: "destructive",
         title: "Error",
-        description: "Failed to update customer status"
+        description: errorMessage
+      })
+    }
+  }
+
+  const resetCustomerStatus = async (customerId: string) => {
+    try {
+      const success = await updateUser(customerId, { fabrication_status: 0 })
+      if (success) {
+        toast({
+          title: "Success",
+          description: "Customer status reset to new"
+        })
+        loadCustomers() // Reload the list
+      } else {
+        throw new Error("Update failed")
+      }
+    } catch (error) {
+      console.error("Failed to reset customer status:", error)
+      const errorMessage = error instanceof Error ? error.message : "Failed to reset customer status"
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: errorMessage
       })
     }
   }
@@ -84,8 +112,8 @@ function VisitedCustomersContent() {
     return (
       <div className="flex items-center justify-center min-h-96">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600 mx-auto mb-4"></div>
-          <p className="text-slate-600">Loading visited customers...</p>
+          <RefreshCw className="h-12 w-12 text-green-600 animate-spin mx-auto mb-4" />
+          <p className="text-slate-600">Loading cart customers...</p>
         </div>
       </div>
     )
@@ -97,39 +125,62 @@ function VisitedCustomersContent() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
-            <Eye className="h-8 w-8 text-cyan-600" />
-            Visited Customers
+            <ShoppingBag className="h-8 w-8 text-green-600" />
+            Cart Customers
           </h1>
           <p className="text-slate-600 mt-2">
-            Customers who have visited the fabrication service and checked pricing (Status: 1)
+            Customers who have added fabrication services to their cart (Status: 2)
           </p>
         </div>
-        <Button onClick={loadCustomers} variant="outline">
+        <Button onClick={loadCustomers} variant="outline" className="flex items-center gap-2">
+          <RefreshCw className="h-4 w-4" />
           Refresh
         </Button>
       </div>
 
+      {/* Error Display */}
+      {error && (
+        <Card className="border-red-200 bg-red-50">
+          <CardContent className="p-6">
+            <div className="flex items-center gap-3 text-red-800">
+              <AlertCircle className="h-5 w-5" />
+              <div>
+                <h3 className="font-semibold">Error Loading Customers</h3>
+                <p className="text-sm mt-1">{error}</p>
+                <Button 
+                  onClick={loadCustomers} 
+                  variant="outline" 
+                  className="mt-3 text-red-800 border-red-300 hover:bg-red-100"
+                >
+                  Try Again
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-blue-700">Total Visited</CardTitle>
+            <CardTitle className="text-sm font-medium text-green-700">Total in Cart</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-blue-900">{customers.length}</div>
-            <p className="text-xs text-blue-600 mt-1">Checked pricing</p>
+            <div className="text-2xl font-bold text-green-900">{customers.length}</div>
+            <p className="text-xs text-green-600 mt-1">Ready to purchase</p>
           </CardContent>
         </Card>
 
-        <Card className="bg-gradient-to-br from-green-50 to-green-100 border-green-200">
+        <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-green-700">With Company</CardTitle>
+            <CardTitle className="text-sm font-medium text-blue-700">With Company</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-900">
+            <div className="text-2xl font-bold text-blue-900">
               {customers.filter(c => c.company).length}
             </div>
-            <p className="text-xs text-green-600 mt-1">Business customers</p>
+            <p className="text-xs text-blue-600 mt-1">Business customers</p>
           </CardContent>
         </Card>
 
@@ -146,6 +197,18 @@ function VisitedCustomersContent() {
               }).length}
             </div>
             <p className="text-xs text-purple-600 mt-1">New this month</p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-orange-700">Conversion Rate</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-orange-900">
+              {customers.length > 0 ? '100%' : '0%'}
+            </div>
+            <p className="text-xs text-orange-600 mt-1">Visited → Cart</p>
           </CardContent>
         </Card>
       </div>
@@ -171,28 +234,28 @@ function VisitedCustomersContent() {
       {/* Customers List */}
       <Card>
         <CardHeader>
-          <CardTitle>Visited Customers ({filteredCustomers.length})</CardTitle>
+          <CardTitle>Cart Customers ({filteredCustomers.length})</CardTitle>
         </CardHeader>
         <CardContent>
           {filteredCustomers.length === 0 ? (
             <div className="text-center py-12">
-              <Eye className="h-16 w-16 text-slate-400 mx-auto mb-4" />
+              <ShoppingBag className="h-16 w-16 text-slate-400 mx-auto mb-4" />
               <h3 className="text-xl font-semibold text-slate-900 mb-2">
-                {searchQuery ? "No customers found" : "No visited customers"}
+                {searchQuery ? "No customers found" : "No cart customers"}
               </h3>
               <p className="text-slate-600">
-                {searchQuery ? "Try adjusting your search criteria" : "Customers who visit fabrication services will appear here"}
+                {searchQuery ? "Try adjusting your search criteria" : "Customers who add items to cart will appear here"}
               </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {filteredCustomers.map((customer) => (
-                <Card key={customer.id} className="hover:shadow-lg transition-shadow">
+                <Card key={customer.id} className="hover:shadow-lg transition-shadow border-green-200">
                   <CardContent className="p-6">
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
                         <h3 className="font-semibold text-slate-900">{customer.full_name}</h3>
-                        <Badge className="bg-blue-100 text-blue-800">Visited</Badge>
+                        <Badge className="bg-green-100 text-green-800">In Cart</Badge>
                       </div>
 
                       <div className="space-y-2">
@@ -221,14 +284,24 @@ function VisitedCustomersContent() {
                         </div>
                       </div>
 
-                      <div className="pt-4 border-t border-slate-200">
+                      <div className="pt-4 border-t border-slate-200 space-y-2">
                         <Button
-                          onClick={() => moveToCartCustomers(customer.id)}
-                          className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800"
+                          onClick={() => moveToVisitedCustomers(customer.id)}
+                          variant="outline"
+                          className="w-full"
                           size="sm"
                         >
-                          Move to Cart Customers
-                          <ArrowRight className="h-4 w-4 ml-2" />
+                          <ArrowLeft className="h-4 w-4 mr-2" />
+                          Move to Visited
+                        </Button>
+
+                        <Button
+                          onClick={() => resetCustomerStatus(customer.id)}
+                          variant="outline"
+                          className="w-full text-slate-600"
+                          size="sm"
+                        >
+                          Reset Status
                         </Button>
                       </div>
                     </div>
@@ -239,15 +312,41 @@ function VisitedCustomersContent() {
           )}
         </CardContent>
       </Card>
+
+      {/* High-Value Customers Alert */}
+      {customers.length > 0 && (
+        <Card className="border-green-200 bg-green-50">
+          <CardHeader>
+            <CardTitle className="text-green-800 flex items-center gap-2">
+              <DollarSign className="h-5 w-5" />
+              Sales Opportunity
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-green-700">
+              You have {customers.length} customers with items in their cart. These are high-intent prospects 
+              ready to make a purchase. Consider reaching out to them to complete their orders.
+            </p>
+            <div className="mt-4 flex gap-2">
+              <Button size="sm" className="bg-green-600 hover:bg-green-700">
+                Send Follow-up Emails
+              </Button>
+              <Button size="sm" variant="outline">
+                Export Customer List
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }
 
-export default function VisitedCustomersPage() {
+export default function CartCustomersPage() {
   return (
     <AdminGuard>
       <AdminLayout>
-        <VisitedCustomersContent />
+        <CartCustomersContent />
       </AdminLayout>
     </AdminGuard>
   )

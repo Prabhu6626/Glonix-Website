@@ -23,9 +23,128 @@ interface CartItem {
 
 function CartContent() {
   const router = useRouter()
-  const { items: cartItems, loading, updateQuantity, removeItem, clearCart } = useCart()
+  const [cartItems, setCartItems] = useState<CartItem[]>([])
+  const [loading, setLoading] = useState(true)
   const [promoCode, setPromoCode] = useState("")
   const [discount, setDiscount] = useState(0)
+
+  useEffect(() => {
+    // Load user-specific cart from localStorage
+    const loadUserCart = () => {
+      const userData = localStorage.getItem("current_user")
+      console.log("Cart page loading - userData:", userData)
+      
+      if (!userData) {
+        console.log("No user data found, clearing cart")
+        setCartItems([])
+        setLoading(false)
+        return
+      }
+
+      try {
+        const user = JSON.parse(userData)
+        const userId = user.id
+        const cartKey = `cart_${userId}`
+        console.log("Loading cart for user:", userId, "with key:", cartKey)
+        
+        const storedCart = localStorage.getItem(cartKey)
+        console.log("Stored cart data:", storedCart)
+        
+        if (storedCart) {
+          const parsedCart = JSON.parse(storedCart)
+          console.log("Parsed cart:", parsedCart)
+          
+          // Handle both array format (new) and single object format (legacy)
+          if (Array.isArray(parsedCart)) {
+            console.log("Setting array cart items:", parsedCart)
+            setCartItems(parsedCart)
+          } else if (parsedCart && typeof parsedCart === 'object') {
+            // Convert single quotation object to cart item format
+            const cartItem: CartItem = {
+              id: parsedCart.order_id || `quotation-${Date.now()}`,
+              name: `PCB Fabrication - ${parsedCart.Layers} layers`,
+              sku: `PCB-${parsedCart.Layers}-${parsedCart.Thickness}`,
+              price: parseFloat(parsedCart.price) || 0,
+              image: parsedCart.File_Url || "/placeholder-pcb.png",
+              quantity: 1,
+              inStock: true
+            }
+            console.log("Converting single object to cart item:", cartItem)
+            setCartItems([cartItem])
+          }
+        } else {
+          console.log("No stored cart found for user")
+          setCartItems([])
+        }
+      } catch (error) {
+        console.error("Failed to parse user or cart data:", error)
+        setCartItems([])
+      }
+      
+      setLoading(false)
+    }
+
+    loadUserCart()
+
+    // Listen for storage changes (user login/logout)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "current_user") {
+        loadUserCart()
+      }
+    }
+
+    window.addEventListener("storage", handleStorageChange)
+    
+    // Also listen for custom events (for same-tab changes)
+    const handleUserChange = () => {
+      loadUserCart()
+    }
+
+    window.addEventListener("userChanged", handleUserChange)
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange)
+      window.removeEventListener("userChanged", handleUserChange)
+    }
+  }, [])
+
+  const updateCart = (updatedItems: CartItem[]) => {
+    setCartItems(updatedItems)
+    
+    // Save to user-specific cart
+    const userData = localStorage.getItem("current_user")
+    if (userData) {
+      try {
+        const user = JSON.parse(userData)
+        const userId = user.id
+        const cartKey = `cart_${userId}`
+        localStorage.setItem(cartKey, JSON.stringify(updatedItems))
+        console.log("Cart updated for user:", userId, "items:", updatedItems)
+
+        // Reset fabrication status to 0 if cart is empty
+        if (updatedItems.length === 0) {
+          AuthService.updateFabricationStatus(userId, 0)
+        }
+      } catch (error) {
+        console.error("Failed to save cart update:", error)
+      }
+    }
+  }
+
+  const updateQuantity = (id: string, newQuantity: number) => {
+    if (newQuantity <= 0) {
+      removeItem(id)
+      return
+    }
+
+    const updatedItems = cartItems.map((item) => (item.id === id ? { ...item, quantity: newQuantity } : item))
+    updateCart(updatedItems)
+  }
+
+  const removeItem = (id: string) => {
+    const updatedItems = cartItems.filter((item) => item.id !== id)
+    updateCart(updatedItems)
+  }
 
   const moveToWishlist = (item: CartItem) => {
     // Add to wishlist

@@ -13,10 +13,6 @@ interface CreateOrderData {
   total: number
 }
 
-interface CartItem {
-  product_id: string
-  quantity: number
-}
 export class CustomerApiService {
   private static readonly API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
@@ -56,54 +52,6 @@ export class CustomerApiService {
     }
   }
 
-  // Cart management
-  static async addToCart(productId: string, quantity: number = 1): Promise<boolean> {
-    try {
-      await this.apiRequest('/cart/add', {
-        method: 'POST',
-        body: JSON.stringify({ product_id: productId, quantity }),
-      })
-      return true
-    } catch (error) {
-      console.error("Failed to add to cart:", error)
-      return false
-    }
-  }
-
-  static async getCart(): Promise<any[]> {
-    try {
-      const response = await this.apiRequest('/cart')
-      return response.cart || []
-    } catch (error) {
-      console.error("Failed to get cart:", error)
-      return []
-    }
-  }
-
-  static async updateCart(items: CartItem[]): Promise<boolean> {
-    try {
-      await this.apiRequest('/cart', {
-        method: 'PUT',
-        body: JSON.stringify({ items }),
-      })
-      return true
-    } catch (error) {
-      console.error("Failed to update cart:", error)
-      return false
-    }
-  }
-
-  static async clearCart(): Promise<boolean> {
-    try {
-      await this.apiRequest('/cart', {
-        method: 'DELETE',
-      })
-      return true
-    } catch (error) {
-      console.error("Failed to clear cart:", error)
-      return false
-    }
-  }
   // Create a new order
   static async createOrder(orderData: CreateOrderData): Promise<{ success: boolean; order_id?: string; error?: string }> {
     try {
@@ -207,17 +155,6 @@ export class CustomerApiService {
     } catch (error) {
       console.error("Failed to get products:", error)
       return []
-    }
-  }
-
-  // Get product by ID
-  static async getProductById(productId: string): Promise<any | null> {
-    try {
-      const products = await this.getProducts()
-      return products.find(p => p.id === productId) || null
-    } catch (error) {
-      console.error("Failed to get product:", error)
-      return null
     }
   }
 }
