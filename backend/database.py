@@ -276,6 +276,42 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to update fabrication status for user {user_id}: {e}")
             return False
+
+    def get_users_with_cart_items(self) -> List[Dict[str, Any]]:
+        """Get users who have items in their cart"""
+        try:
+            users = list(self.db.users.find({
+                "cart": {"$exists": True, "$ne": []},
+                "role": {"$ne": "admin"}
+            }).sort("updated_at", -1))
+            
+            # Convert ObjectId to string and remove password hash
+            for user in users:
+                user["_id"] = str(user["_id"])
+                user.pop("hashed_password", None)
+            
+            return users
+        except Exception as e:
+            logger.error(f"Failed to get users with cart items: {e}")
+            return []
+
+    def get_users_who_visited(self) -> List[Dict[str, Any]]:
+        """Get users who visited but haven't added to cart"""
+        try:
+            users = list(self.db.users.find({
+                "fabrication_status": 1,
+                "role": {"$ne": "admin"}
+            }).sort("updated_at", -1))
+            
+            # Convert ObjectId to string and remove password hash
+            for user in users:
+                user["_id"] = str(user["_id"])
+                user.pop("hashed_password", None)
+            
+            return users
+        except Exception as e:
+            logger.error(f"Failed to get users who visited: {e}")
+            return []
     
     def get_all_users(self, skip: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
         """Get all users with pagination"""

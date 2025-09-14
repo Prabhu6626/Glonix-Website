@@ -173,7 +173,6 @@ const Assembly = () => {
   }, [price, username]);
 
   const handleAddToCart = async () => {
-    // Debug: Check each field individually
     const fieldChecks = {
       username: !!username,
       order_type: !!order_type,
@@ -205,81 +204,31 @@ const Assembly = () => {
       return;
     }
     
-    const quotationData = {
-      username,
-      order_type,
-      order_id,
-      File_Url: url,
-      BaseMaterial: selectedMaterial,
-      Quantity: `${quantity} pcs`,
-      SmdPoints: smdPoints,
-      ThPoints: thPoints,
-      BqlPoints: bqlPoints,
-      TotalPoints: totalPoints,
-      ConformalCoating: conformalCoating,
-      Stencil: stencil,
-      price: calculateTotal().toFixed(2),
-    };
-    
-    if (typeof window !== 'undefined') {
-      // Get current user ID for user-specific cart
-      const userData = localStorage.getItem("current_user");
-      if (!userData) {
-        alert("⚠ Please login to add items to cart.");
-        return;
+    try {
+      // Create a cart item for assembly service
+      const assemblyItem = {
+        id: order_id || `assembly-${Date.now()}`,
+        name: `PCB Assembly - ${totalPoints} points`,
+        sku: `ASM-${totalPoints}`,
+        price: parseFloat(calculateTotal().toFixed(2)) || 0,
+        image: url || "/placeholder-assembly.png",
+        inStock: true,
+      };
+
+      // Add to cart via API
+      const success = await CustomerApiService.addToCart(assemblyItem.id, 1);
+      
+      if (success) {
+        alert("✅ Assembly service added to cart!");
+        router.push("/cart");
+        reset();
+      } else {
+        throw new Error("Failed to add to cart");
       }
-
-      try {
-        const user = JSON.parse(userData);
-        const userId = user.id;
-        const cartKey = `cart_${userId}`;
-        
-        // Convert quotation data to cart item format
-        const cartItem = {
-          id: quotationData.order_id || `assembly-${Date.now()}`,
-          name: `PCB Assembly - ${quotationData.TotalPoints} points`,
-          sku: `ASM-${quotationData.TotalPoints}`,
-          price: parseFloat(quotationData.price) || 0,
-          image: quotationData.File_Url || "/placeholder-assembly.png",
-          quantity: 1,
-          inStock: true,
-          // Store original quotation data for reference
-          quotationData: quotationData
-        };
-        
-        // Get existing cart items for this user
-        const existingCart = localStorage.getItem(cartKey);
-        let cartItems = [];
-        
-        if (existingCart) {
-          try {
-            const parsedCart = JSON.parse(existingCart);
-            cartItems = Array.isArray(parsedCart) ? parsedCart : [];
-          } catch (error) {
-            console.error("Failed to parse existing cart:", error);
-            cartItems = [];
-          }
-        }
-        
-        // Add new item to existing cart
-        cartItems.push(cartItem);
-
-        localStorage.setItem("price", quotationData.price);
-        localStorage.setItem(cartKey, JSON.stringify(cartItems));
-        localStorage.setItem("store", JSON.stringify(quotationData));
-
-        // Optional: Update assembly status if method exists
-        // AuthService.updateAssemblyStatus(userId, 2);
-      } catch (error) {
-        console.error("Failed to save cart data:", error);
-        alert("⚠ Failed to add item to cart. Please try again.");
-        return;
-      }
+    } catch (error) {
+      console.error("Failed to add assembly to cart:", error);
+      alert("⚠ Failed to add item to cart. Please try again.");
     }
-
-    alert("✅ Quotation added to cart!");
-    router.push("/payment");
-    reset();
   };
 
   const reset = () => {

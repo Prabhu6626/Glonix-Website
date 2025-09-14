@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { AdminLayout } from "@/components/admin/admin-layout"
 import { AdminGuard } from "@/components/admin/admin-guard"
-import { getUsersByFabricationStatus, updateUser } from "@/lib/admin-utils"
+import { AdminApiService } from "@/lib/admin-api"
 import type { User } from "@/lib/types"
 import { ShoppingBag, Search, Mail, Phone, Building, Calendar, ArrowLeft, DollarSign } from "lucide-react"
 import { toast } from "@/components/ui/use-toast"
@@ -30,7 +30,7 @@ function CartCustomersContent() {
     try {
       setLoading(true)
       // Get users with fabrication_status = 2 (added to cart)
-      const cartUsers = await getUsersByFabricationStatus(2)
+      const cartUsers = await AdminApiService.getUsersByFabricationStatus(2)
       setCustomers(cartUsers)
     } catch (error) {
       console.error("Failed to load cart customers:", error)
@@ -60,7 +60,7 @@ function CartCustomersContent() {
 
   const moveToVisitedCustomers = async (customerId: string) => {
     try {
-      const success = await updateUser(customerId, { fabrication_status: 1 })
+      const success = await AdminApiService.updateUser(customerId, { fabrication_status: 1 })
       if (success) {
         toast({
           title: "Success",
@@ -82,7 +82,7 @@ function CartCustomersContent() {
 
   const resetCustomerStatus = async (customerId: string) => {
     try {
-      const success = await updateUser(customerId, { fabrication_status: 0 })
+      const success = await AdminApiService.updateUser(customerId, { fabrication_status: 0 })
       if (success) {
         toast({
           title: "Success",

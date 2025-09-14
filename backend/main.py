@@ -494,6 +494,117 @@ async def get_project_analytics(current_user: dict = Depends(get_current_user)):
     stats = db_manager.get_project_stats()
     return {"project_stats": stats}
 
+# CUSTOMER CART MANAGEMENT
+@app.post("/cart/add")
+async def add_to_cart(
+    item: CartItemModel,
+    current_user: dict = Depends(get_current_user)
+):
+    """Add item to user's cart"""
+    try:
+        user_id = str(current_user["_id"])
+        
+        # Update user's fabrication status to 2 (added to cart)
+        db_manager.update_user(user_id, {"fabrication_status": 2})
+        
+        # Get product details
+        product = db_manager.get_product_by_id(item.product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        
+        # Store cart in user document
+        user = db_manager.get_user_by_id(user_id)
+        current_cart = user.get("cart", [])
+        
+        # Check if item already in cart
+        existing_item = next((i for i in current_cart if i["product_id"] == item.product_id), None)
+        
+        if existing_item:
+            existing_item["quantity"] += item.quantity
+        else:
+            current_cart.append({
+                "product_id": item.product_id,
+                "product_name": product["name"],
+                "product_sku": product["sku"],
+                "price": product["price"],
+                "quantity": item.quantity,
+                "image": product.get("image", "")
+            })
+        
+        # Update user's cart
+        db_manager.update_user(user_id, {"cart": current_cart})
+        
+        return {"success": True, "message": "Item added to cart"}
+        
+    except Exception as e:
+        print(f"Add to cart error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to add item to cart")
+
+@app.get("/cart")
+async def get_cart(current_user: dict = Depends(get_current_user)):
+    """Get user's cart"""
+    try:
+        user_id = str(current_user["_id"])
+        user = db_manager.get_user_by_id(user_id)
+        cart = user.get("cart", [])
+        
+        return {"cart": cart}
+        
+    except Exception as e:
+        print(f"Get cart error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get cart")
+
+@app.put("/cart")
+async def update_cart(
+    cart_update: CartUpdateModel,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update user's cart"""
+    try:
+        user_id = str(current_user["_id"])
+        
+        # Convert cart items to detailed format
+        cart_items = []
+        for item in cart_update.items:
+            product = db_manager.get_product_by_id(item.product_id)
+            if product:
+                cart_items.append({
+                    "product_id": item.product_id,
+                    "product_name": product["name"],
+                    "product_sku": product["sku"],
+                    "price": product["price"],
+                    "quantity": item.quantity,
+                    "image": product.get("image", "")
+                })
+        
+        # Update fabrication status based on cart contents
+        status = 2 if cart_items else 0
+        db_manager.update_user(user_id, {
+            "cart": cart_items,
+            "fabrication_status": status
+        })
+        
+        return {"success": True, "message": "Cart updated"}
+        
+    except Exception as e:
+        print(f"Update cart error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update cart")
+
+@app.delete("/cart")
+async def clear_cart(current_user: dict = Depends(get_current_user)):
+    """Clear user's cart"""
+    try:
+        user_id = str(current_user["_id"])
+        db_manager.update_user(user_id, {
+            "cart": [],
+            "fabrication_status": 0
+        })
+        
+        return {"success": True, "message": "Cart cleared"}
+        
+    except Exception as e:
+        print(f"Clear cart error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear cart")
 # ADMIN USER MANAGEMENT ROUTES
 @app.get("/admin/users", response_model=Dict[str, Any])
 async def get_all_users_admin(
@@ -1028,6 +1139,10 @@ async def get_admin_analytics(
     design_enquiries = db_manager.get_enquiries_count(enquiry_type="design_enquiry")
     product_enquiries = db_manager.get_enquiries_count(enquiry_type="product_enquiry")
     
+    # Add user behavior stats
+    visited_users = len(db_manager.get_users_who_visited())
+    cart_users = len(db_manager.get_users_with_cart_items())
+    
     return {
         "totalUsers": stats.get("total_users", 0),
         "totalProducts": stats.get("total_products", 0),
@@ -1040,7 +1155,9 @@ async def get_admin_analytics(
         "totalEnquiries": total_enquiries,
         "newEnquiries": new_enquiries,
         "designEnquiries": design_enquiries,
-        "productEnquiries": product_enquiries
+        "productEnquiries": product_enquiries,
+        "visitedUsers": visited_users,
+        "cartUsers": cart_users
     }
 
 # Health check endpoint

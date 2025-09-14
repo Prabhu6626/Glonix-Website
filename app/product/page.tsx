@@ -72,8 +72,7 @@ class ProductApiService {
     }
   }
 }
-
-function ProductCatalogContent() {
+  static async updateFabricationStatus(userId: string, status: 1 | 2): Promise<boolean> {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { addItem: addToCart } = useCart()
@@ -106,9 +105,10 @@ function ProductCatalogContent() {
   const loadProducts = async () => {
     try {
       setLoading(true)
-      const productsData = await ProductApiService.getAllProducts()
+      const productsData = await CustomerApiService.getProducts()
       setProducts(productsData)
       setFilteredProducts(productsData)
+      return true
       
       if (productsData.length === 0) {
         toast({
@@ -118,6 +118,7 @@ function ProductCatalogContent() {
       }
     } catch (error) {
       console.error("Failed to load products:", error)
+      return false
       toast({
         variant: "destructive",
         title: "Error",
@@ -174,13 +175,12 @@ function ProductCatalogContent() {
       return
     }
 
-    addToCart({
+    addItem({
       id: product.id,
       name: product.name,
       sku: product.sku,
       price: product.price,
       image: product.image,
-      quantity: 1,
       inStock: product.inStock,
     })
 

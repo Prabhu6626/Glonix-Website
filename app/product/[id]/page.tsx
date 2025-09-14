@@ -88,7 +88,7 @@ class ProductApiService {
 function ProductDetailContent() {
   const router = useRouter()
   const params = useParams()
-  const { addItem: addToCart } = useCart()
+  const { addItem } = useCart()
   const { addItem: addToWishlist, removeItem: removeFromWishlist, isInWishlist } = useWishlist()
   
   const [product, setProduct] = useState<Product | null>(null)
@@ -104,7 +104,7 @@ function ProductDetailContent() {
 
   const loadCurrentUser = async () => {
     try {
-      const user = await AuthService.getCurrentUser()
+      const user = AuthService.getStoredUser()
       setCurrentUser(user)
     } catch (error) {
       console.error("Failed to load current user:", error)
@@ -115,14 +115,14 @@ function ProductDetailContent() {
     try {
       setLoading(true)
       
-      const productData = await ProductApiService.getProductById(params.id as string)
+      const productData = await CustomerApiService.getProductById(params.id as string)
       
       if (productData) {
         setProduct(productData)
         
         // Update fabrication status to "visited" (1) when user views product
         if (currentUser?.id) {
-          await ProductApiService.updateFabricationStatus(currentUser.id, 1)
+          await AuthService.updateFabricationStatus(currentUser.id, 1)
         }
       } else {
         toast({
@@ -164,19 +164,16 @@ function ProductDetailContent() {
       return
     }
 
-    addToCart({
-      id: product.id,
-      name: product.name,
-      sku: product.sku,
-      price: product.price,
-      image: product.image,
-      quantity: quantity,
-      inStock: product.inStock,
-    })
-
-    // Update fabrication status to "added to cart" (2)
-    if (currentUser?.id) {
-      await ProductApiService.updateFabricationStatus(currentUser.id, 2)
+    // Add multiple quantities
+    for (let i = 0; i < quantity; i++) {
+      await addItem({
+        id: product.id,
+        name: product.name,
+        sku: product.sku,
+        price: product.price,
+        image: product.image,
+        inStock: product.inStock,
+      })
     }
 
     toast({
@@ -196,16 +193,16 @@ function ProductDetailContent() {
       })
     } else {
       addToWishlist({
-        id: product.id,
-        name: product.name,
-        sku: product.sku,
-        price: product.price,
-        image: product.image,
-        inStock: product.inStock,
-        rating: product.rating || 0,
-        reviews: product.reviews || 0,
-      })
-      toast({
+      id: product.id,
+      name: product.name,
+      sku: product.sku,
+      price: product.price,
+      image: product.image,
+      inStock: product.inStock,
+    })
+
+    toast({
+        description: `${product.name} removed from your wishlist.`
         title: "Added to Wishlist",
         description: `${product.name} added to your wishlist.`
       })

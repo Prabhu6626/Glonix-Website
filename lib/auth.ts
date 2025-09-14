@@ -28,6 +28,7 @@ export interface RegisterData {
 export class AuthService {
   private static readonly TOKEN_KEY = "access_token"
   private static readonly API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+  private static readonly USER_KEY = "current_user"
 
   private static async apiRequest(endpoint: string, options: RequestInit = {}): Promise<any> {
     const url = `${this.API_BASE_URL}${endpoint}`
@@ -92,6 +93,12 @@ export class AuthService {
       if (response.access_token) {
         this.setToken(response.access_token)
         
+        // Get and store user data
+        const userData = await this.getCurrentUser()
+        if (userData) {
+          localStorage.setItem(this.USER_KEY, JSON.stringify(userData))
+        }
+        
         if (typeof window !== "undefined") {
           localStorage.setItem("session_start", Date.now().toString())
         }
@@ -116,6 +123,12 @@ export class AuthService {
       if (response.access_token) {
         this.setToken(response.access_token)
         
+        // Get and store user data
+        const userData = await this.getCurrentUser()
+        if (userData) {
+          localStorage.setItem(this.USER_KEY, JSON.stringify(userData))
+        }
+        
         if (typeof window !== "undefined") {
           localStorage.setItem("session_start", Date.now().toString())
         }
@@ -135,10 +148,19 @@ export class AuthService {
       if (!this.isAuthenticated()) return null
       
       const response = await this.apiRequest('/auth/me')
+      
+      // Store user data locally for quick access
+      if (response && typeof window !== "undefined") {
+        localStorage.setItem(this.USER_KEY, JSON.stringify(response))
+      }
+      
       return response
     } catch (error) {
       console.error('Failed to get current user:', error)
       this.removeToken()
+      if (typeof window !== "undefined") {
+        localStorage.removeItem(this.USER_KEY)
+      }
       return null
     }
   }
@@ -162,6 +184,7 @@ export class AuthService {
     if (typeof window !== "undefined") {
       localStorage.removeItem("session_start")
       localStorage.removeItem("user_preferences")
+      localStorage.removeItem(this.USER_KEY)
       window.location.href = "/"
     }
   }
@@ -197,11 +220,31 @@ export class AuthService {
         method: 'PUT',
         body: JSON.stringify({ user_id: userId, status }),
       })
+      
+      // Update local user data
+      const userData = localStorage.getItem(this.USER_KEY)
+      if (userData) {
+        const user = JSON.parse(userData)
+        user.fabrication_status = status
+        localStorage.setItem(this.USER_KEY, JSON.stringify(user))
+      }
+      
       return true
     } catch (error) {
       console.error('Failed to update fabrication status:', error)
       return false
     }
+  }
+
+  static async updateAssemblyStatus(userId: string, status: 0 | 1 | 2): Promise<boolean> {
+    // For now, use the same endpoint as fabrication status
+    return this.updateFabricationStatus(userId, status)
+  }
+
+  static getStoredUser(): User | null {
+    if (typeof window === "undefined") return null
+    const userData = localStorage.getItem(this.USER_KEY)
+    return userData ? JSON.parse(userData) : null
   }
 
   static async getUsersByFabricationStatus(status: 0 | 1 | 2): Promise<User[]> {

@@ -1,6 +1,8 @@
 "use client"
 
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
+import { CustomerApiService } from "@/lib/customer-api"
+import { AuthService } from "@/lib/auth"
 
 interface CartItem {
   id: string
@@ -20,78 +22,50 @@ interface CartContextType {
   removeItem: (id: string) => void
   updateQuantity: (id: string, quantity: number) => void
   clearCart: () => void
+  loading: boolean
+  refreshCart: () => Promise<void>
 }
 
 const CartContext = createContext<CartContextType | null>(null)
 
 export function CartProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([])
+  const [loading, setLoading] = useState(false)
 
-  // Load cart from localStorage on mount and when user changes
+  // Load cart from MongoDB via API
   useEffect(() => {
-    const loadUserCart = () => {
-      // Get current user ID
-      const userData = localStorage.getItem("current_user")
-      console.log("Cart loading - userData:", userData)
-      
-      if (!userData) {
-        console.log("No user data found, clearing cart")
+    const loadUserCart = async () => {
+      if (!AuthService.isAuthenticated()) {
         setItems([])
         return
       }
 
+      setLoading(true)
       try {
-        const user = JSON.parse(userData)
-        const userId = user.id
-        const cartKey = `cart_${userId}`
-        console.log("Loading cart for user:", userId, "with key:", cartKey)
+        const cartData = await CustomerApiService.getCart()
         
-        const storedCart = localStorage.getItem(cartKey)
-        console.log("Stored cart data:", storedCart)
+        // Convert API cart format to component format
+        const cartItems: CartItem[] = cartData.map((item: any) => ({
+          id: item.product_id,
+          name: item.product_name,
+          sku: item.product_sku,
+          price: item.price,
+          image: item.image,
+          quantity: item.quantity,
+          inStock: true // Will be validated on checkout
+        }))
         
-        if (storedCart) {
-          const parsedCart = JSON.parse(storedCart)
-          console.log("Parsed cart:", parsedCart)
-          
-          // Handle both array format (new) and single object format (legacy)
-          if (Array.isArray(parsedCart)) {
-            console.log("Setting array cart items:", parsedCart)
-            setItems(parsedCart)
-          } else if (parsedCart && typeof parsedCart === 'object') {
-            // Convert single quotation object to cart item format
-            const cartItem: CartItem = {
-              id: parsedCart.order_id || `quotation-${Date.now()}`,
-              name: `PCB Fabrication - ${parsedCart.Layers} layers`,
-              sku: `PCB-${parsedCart.Layers}-${parsedCart.Thickness}`,
-              price: parseFloat(parsedCart.price) || 0,
-              image: parsedCart.File_Url || "/placeholder-pcb.png",
-              quantity: 1,
-              inStock: true
-            }
-            console.log("Converting single object to cart item:", cartItem)
-            setItems([cartItem])
-          }
-        } else {
-          console.log("No stored cart found for user")
-          setItems([])
-        }
+        setItems(cartItems)
       } catch (error) {
-        console.error("Failed to parse user or cart data:", error)
+        console.error("Failed to load cart:", error)
         setItems([])
+      } finally {
+        setLoading(false)
       }
     }
 
     loadUserCart()
 
-    // Listen for storage changes (user login/logout)
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === "current_user") {
-        loadUserCart()
-      }
-    }
-
-    window.addEventListener("storage", handleStorageChange)
-    
     // Also listen for custom events (for same-tab changes)
     const handleUserChange = () => {
       loadUserCart()
@@ -100,76 +74,100 @@ export function CartProvider({ children }: { children: ReactNode }) {
     window.addEventListener("userChanged", handleUserChange)
 
     return () => {
-      window.removeEventListener("storage", handleStorageChange)
       window.removeEventListener("userChanged", handleUserChange)
     }
   }, [])
 
-  // Save cart to localStorage whenever items change
-  useEffect(() => {
-    const saveUserCart = () => {
-      // Get current user ID
-      const userData = localStorage.getItem("current_user")
-      console.log("Saving cart - userData:", userData)
-      
-      if (!userData) {
-        console.log("No user data for saving cart")
-        return
-      }
-
-      try {
-        const user = JSON.parse(userData)
-        const userId = user.id
-        const cartKey = `cart_${userId}`
-        console.log("Saving cart for user:", userId, "with key:", cartKey, "items:", items)
-        localStorage.setItem(cartKey, JSON.stringify(items))
-        console.log("Cart saved successfully")
-      } catch (error) {
-        console.error("Failed to save cart data:", error)
-      }
-    }
-
-    saveUserCart()
-  }, [items])
-
-  const addItem = (newItem: Omit<CartItem, "quantity">) => {
-    console.log("Adding item to cart:", newItem)
-    
-    setItems((prevItems) => {
-      console.log("Previous items:", prevItems)
-      
-      const existingItemIndex = prevItems.findIndex((item) => item.id === newItem.id)
-
-      if (existingItemIndex > -1) {
-        // Item exists, increase quantity
-        const updatedItems = [...prevItems]
-        updatedItems[existingItemIndex].quantity += 1
-        console.log("Updated existing item:", updatedItems)
-        return updatedItems
-      } else {
-        // New item, add with quantity 1
-        const newItems = [...prevItems, { ...newItem, quantity: 1 }]
-        console.log("Added new item:", newItems)
-        return newItems
-      }
-    })
-  }
-
-  const removeItem = (id: string) => {
-    setItems((prevItems) => prevItems.filter((item) => item.id !== id))
-  }
-
-  const updateQuantity = (id: string, quantity: number) => {
-    if (quantity <= 0) {
-      removeItem(id)
+  const refreshCart = async () => {
+    if (!AuthService.isAuthenticated()) {
+      setItems([])
       return
     }
 
-    setItems((prevItems) => prevItems.map((item) => (item.id === id ? { ...item, quantity } : item)))
+    setLoading(true)
+    try {
+      const cartData = await CustomerApiService.getCart()
+      
+      const cartItems: CartItem[] = cartData.map((item: any) => ({
+        id: item.product_id,
+        name: item.product_name,
+        sku: item.product_sku,
+        price: item.price,
+        image: item.image,
+        quantity: item.quantity,
+        inStock: true
+      }))
+      
+      setItems(cartItems)
+    } catch (error) {
+      console.error("Failed to refresh cart:", error)
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const clearCart = () => {
-    setItems([])
+  const addItem = async (newItem: Omit<CartItem, "quantity">) => {
+    try {
+      const success = await CustomerApiService.addToCart(newItem.id, 1)
+      if (success) {
+        await refreshCart()
+      }
+    } catch (error) {
+      console.error("Failed to add item to cart:", error)
+    }
+  }
+
+  const removeItem = async (id: string) => {
+    try {
+      const updatedItems = items.filter(item => item.id !== id)
+      const cartItems = updatedItems.map(item => ({
+        product_id: item.id,
+        quantity: item.quantity
+      }))
+      
+      const success = await CustomerApiService.updateCart(cartItems)
+      if (success) {
+        await refreshCart()
+      }
+    } catch (error) {
+      console.error("Failed to remove item from cart:", error)
+    }
+  }
+
+  const updateQuantity = async (id: string, quantity: number) => {
+    if (quantity <= 0) {
+      await removeItem(id)
+      return
+    }
+
+    try {
+      const updatedItems = items.map(item => 
+        item.id === id ? { ...item, quantity } : item
+      )
+      
+      const cartItems = updatedItems.map(item => ({
+        product_id: item.id,
+        quantity: item.quantity
+      }))
+      
+      const success = await CustomerApiService.updateCart(cartItems)
+      if (success) {
+        await refreshCart()
+      }
+    } catch (error) {
+      console.error("Failed to update cart quantity:", error)
+    }
+  }
+
+  const clearCart = async () => {
+    try {
+      const success = await CustomerApiService.clearCart()
+      if (success) {
+        setItems([])
+      }
+    } catch (error) {
+      console.error("Failed to clear cart:", error)
+    }
   }
 
   const itemCount = Array.isArray(items) ? items.reduce((total, item) => total + item.quantity, 0) : 0
@@ -185,6 +183,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
         removeItem,
         updateQuantity,
         clearCart,
+        loading,
+        refreshCart,
       }}
     >
       {children}
